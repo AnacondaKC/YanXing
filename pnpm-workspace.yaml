@@ -1,0 +1,6 @@
+allowBuilds:
+  esbuild: true
+  sharp: true
+
+overrides:
+  nanoid: 3.3.18

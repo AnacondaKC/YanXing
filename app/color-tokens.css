@@ -1,0 +1,228 @@
+/**
+ * 研行配色体系（唯一来源）
+ *
+ * 怎么定，而不是继续叠历史色值：
+ * 1. 先定角色，再填色值。页面只允许用这些角色，不允许再写一套「看起来差不多的绿」。
+ * 2. 中性色用暖灰纸感（墨、米、线），提醒用琥珀黄，主色只用一种沉稳绿。
+ * 3. 绿色降低饱和、略加深，避免 Tailwind emerald-500 那种偏青的亮翠绿。
+ * 4. 深色模式沿用同一套角色，只换明暗，不再切到蓝黑或把彩色抹成灰。
+ * 5. 组件用 bg-yx-brand / text-yx-ink / var(--yx-brand) ；新增颜色先加 token。
+ *
+ * 主色 #1b6e52：同属绿色，比 #10b981 更深、更稳，白字按钮对比度足够。
+ */
+
+:root {
+  /* 圆角三层级（全局唯一定义点）：
+     控件 rounded-md = calc(var(--radius) - 2px) = 4px
+     卡片 rounded-lg = var(--radius)             = 6px
+     主 CTA rounded-xl = calc(var(--radius) + 4px) = 10px */
+  --radius: 0.375rem;
+
+  /* —— 暖灰中性 —— */
+  --yx-ink: #37352f;
+  --yx-ink-soft: #5f5e5b;
+  --yx-muted: #787774;
+  --yx-faint: #9b9a97;
+  --yx-line: #e3e1db;
+  --yx-hover: #efedea;
+  --yx-surface: #f7f6f3;
+  --yx-paper: #ffffff;
+  --yx-bg: #ffffff;
+  --yx-canvas: #ffffff;
+  --yx-canvas-inner: #f7f6f3;
+
+  /* —— 沉稳绿（品牌） ——
+     deep → strong → hover → brand → bright → tint → soft */
+  --yx-brand-deep: #0a3328;
+  --yx-brand-strong: #0f4c39;
+  --yx-brand-hover: #155a43;
+  --yx-brand: #1b6e52;
+  --yx-brand-bright: #3d8f6e;
+  --yx-brand-tint: #d5e8de;
+  --yx-brand-soft: #eef5f1;
+  --yx-brand-foreground: #ffffff;
+
+  /* —— 语义 —— */
+  --yx-warning: #f59e0b;
+  --yx-warning-soft: #fffbeb;
+  --yx-warning-text: #b45309;
+  --yx-danger: #eb5757;
+  --yx-danger-soft: #fdeaea;
+  --yx-danger-text: #bd3838;
+
+  /* —— 映射到 shadcn / 基础主题变量 —— */
+  --background: var(--yx-bg);
+  --foreground: var(--yx-ink);
+  --card: var(--yx-paper);
+  --card-foreground: var(--yx-ink);
+  --popover: var(--yx-paper);
+  --popover-foreground: var(--yx-ink);
+  --primary: var(--yx-brand);
+  --primary-foreground: var(--yx-brand-foreground);
+  --secondary: var(--yx-hover);
+  --secondary-foreground: var(--yx-ink);
+  --muted: var(--yx-surface);
+  --muted-foreground: var(--yx-muted);
+  --accent: var(--yx-brand-soft);
+  --accent-foreground: var(--yx-brand-strong);
+  --destructive: var(--yx-danger);
+  --destructive-foreground: #ffffff;
+  --border: var(--yx-line);
+  --input: var(--yx-line);
+  --ring: var(--yx-brand);
+  --sidebar: var(--yx-paper);
+  --sidebar-foreground: var(--yx-ink);
+  --sidebar-primary: var(--yx-brand);
+  --sidebar-primary-foreground: var(--yx-brand-foreground);
+  --sidebar-accent: var(--yx-hover);
+  --sidebar-accent-foreground: var(--yx-ink);
+  --sidebar-border: var(--yx-line);
+  --sidebar-ring: var(--yx-brand);
+  --chart-1: var(--yx-brand);
+  --chart-2: var(--yx-brand-bright);
+  --chart-3: var(--yx-warning);
+  --chart-4: var(--yx-ink-soft);
+  --chart-5: var(--yx-muted);
+
+  /* 让残留的 gray / emerald 工具类也走这套色，而不是 Tailwind 默认冷灰和亮翠绿 */
+  --color-black: var(--yx-ink);
+  --color-gray-50: #fbfbfa;
+  --color-gray-100: var(--yx-surface);
+  --color-gray-200: var(--yx-hover);
+  --color-gray-300: var(--yx-line);
+  --color-gray-400: var(--yx-faint);
+  --color-gray-500: var(--yx-muted);
+  --color-gray-600: var(--yx-ink-soft);
+  --color-gray-700: var(--yx-ink);
+  --color-gray-800: #25231f;
+  --color-gray-900: var(--yx-ink);
+  --color-gray-950: #25231f;
+  --color-neutral-50: var(--color-gray-50);
+  --color-neutral-100: var(--color-gray-100);
+  --color-neutral-200: var(--color-gray-200);
+  --color-neutral-300: var(--color-gray-300);
+  --color-neutral-400: var(--color-gray-400);
+  --color-neutral-500: var(--color-gray-500);
+  --color-neutral-600: var(--color-gray-600);
+  --color-neutral-700: var(--color-gray-700);
+  --color-neutral-800: var(--color-gray-800);
+  --color-neutral-900: var(--color-gray-900);
+  --color-neutral-950: var(--color-gray-950);
+  --color-zinc-50: var(--color-gray-50);
+  --color-zinc-100: var(--color-gray-100);
+  --color-zinc-200: var(--color-gray-200);
+  --color-zinc-300: var(--color-gray-300);
+  --color-zinc-400: var(--color-gray-400);
+  --color-zinc-500: var(--color-gray-500);
+  --color-zinc-600: var(--color-gray-600);
+  --color-zinc-700: var(--color-gray-700);
+  --color-zinc-800: var(--color-gray-800);
+  --color-zinc-900: var(--color-gray-900);
+  --color-zinc-950: var(--color-gray-950);
+
+  --color-emerald-50: var(--yx-brand-soft);
+  --color-emerald-100: var(--yx-brand-tint);
+  --color-emerald-200: #b4d4c4;
+  --color-emerald-300: #7fb89a;
+  --color-emerald-400: var(--yx-brand-bright);
+  --color-emerald-500: var(--yx-brand);
+  --color-emerald-600: var(--yx-brand-hover);
+  --color-emerald-700: var(--yx-brand-strong);
+  --color-emerald-800: var(--yx-brand-deep);
+  --color-emerald-900: #083027;
+  --color-emerald-950: #06241c;
+
+  --color-amber-50: var(--yx-warning-soft);
+  --color-amber-100: #fef3c7;
+  --color-amber-500: var(--yx-warning);
+  --color-amber-600: #d97706;
+  --color-amber-700: var(--yx-warning-text);
+  --color-red-50: var(--yx-danger-soft);
+  --color-red-500: var(--yx-danger);
+  --color-red-600: #d94646;
+  --color-red-700: var(--yx-danger-text);
+}
+
+.dark {
+  --yx-ink: #f2f2ef;
+  --yx-ink-soft: #d5d3cd;
+  --yx-muted: #b4b2ad;
+  --yx-faint: #8a8883;
+  --yx-line: rgba(242, 242, 239, 0.14);
+  --yx-hover: #33312d;
+  --yx-surface: #1f1e1b;
+  --yx-paper: #292825;
+  --yx-bg: #1f1e1b;
+  --yx-canvas: #292825;
+  --yx-canvas-inner: #24231f;
+
+  --yx-brand-deep: #0d2a22;
+  --yx-brand-strong: #1a4d3c;
+  --yx-brand-hover: #5bab86;
+  --yx-brand: #3d8f6e;
+  --yx-brand-bright: #7fb89a;
+  --yx-brand-tint: #1e3d32;
+  --yx-brand-soft: rgba(61, 143, 110, 0.16);
+  --yx-brand-foreground: #f7faf8;
+
+  --yx-warning: #eabc35;
+  --yx-warning-soft: rgba(234, 188, 53, 0.16);
+  --yx-warning-text: #f0cf6e;
+  --yx-danger: #f08080;
+  --yx-danger-soft: rgba(240, 128, 128, 0.16);
+  --yx-danger-text: #f5aaaa;
+
+  --background: var(--yx-bg);
+  --foreground: var(--yx-ink);
+  --card: var(--yx-paper);
+  --card-foreground: var(--yx-ink);
+  --popover: var(--yx-paper);
+  --popover-foreground: var(--yx-ink);
+  --primary: var(--yx-brand);
+  --primary-foreground: var(--yx-brand-foreground);
+  --secondary: var(--yx-hover);
+  --secondary-foreground: var(--yx-ink);
+  --muted: var(--yx-paper);
+  --muted-foreground: var(--yx-muted);
+  --accent: var(--yx-brand-soft);
+  --accent-foreground: var(--yx-brand-bright);
+  --destructive: var(--yx-danger);
+  --destructive-foreground: var(--yx-ink);
+  --border: var(--yx-line);
+  --input: rgba(242, 242, 239, 0.18);
+  --ring: var(--yx-brand);
+  --sidebar: var(--yx-paper);
+  --sidebar-foreground: var(--yx-ink);
+  --sidebar-primary: var(--yx-brand);
+  --sidebar-primary-foreground: var(--yx-brand-foreground);
+  --sidebar-accent: var(--yx-hover);
+  --sidebar-accent-foreground: var(--yx-ink);
+  --sidebar-border: var(--yx-line);
+  --sidebar-ring: var(--yx-brand);
+}
+
+@theme inline {
+  --color-yx-ink: var(--yx-ink);
+  --color-yx-ink-soft: var(--yx-ink-soft);
+  --color-yx-muted: var(--yx-muted);
+  --color-yx-faint: var(--yx-faint);
+  --color-yx-line: var(--yx-line);
+  --color-yx-hover: var(--yx-hover);
+  --color-yx-paper: var(--yx-paper);
+  --color-yx-surface: var(--yx-surface);
+  --color-yx-bg: var(--yx-bg);
+  --color-yx-canvas: var(--yx-canvas);
+  --color-yx-brand: var(--yx-brand);
+  --color-yx-brand-hover: var(--yx-brand-hover);
+  --color-yx-brand-strong: var(--yx-brand-strong);
+  --color-yx-brand-deep: var(--yx-brand-deep);
+  --color-yx-brand-bright: var(--yx-brand-bright);
+  --color-yx-brand-soft: var(--yx-brand-soft);
+  --color-yx-brand-tint: var(--yx-brand-tint);
+  --color-yx-warning: var(--yx-warning);
+  --color-yx-warning-soft: var(--yx-warning-soft);
+  --color-yx-warning-text: var(--yx-warning-text);
+  --color-yx-danger: var(--yx-danger);
+  --color-yx-danger-soft: var(--yx-danger-soft);
+  --color-yx-danger-text: var(--yx-danger-text);
+}

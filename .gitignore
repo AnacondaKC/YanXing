@@ -1,0 +1,14 @@
+node_modules/
+.next/
+.next-dev/
+out/
+.env
+.env.*
+!.env.example
+/storage/
+*.log
+*.tsbuildinfo
+/:memory:
+.netcatty-paste-images/
+.docker-build.json
+yanxing-backup*.tar.gz
