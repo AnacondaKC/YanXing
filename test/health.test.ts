@@ -169,8 +169,15 @@ test('health CLI process contract for web|worker', () => {
   assert.notEqual(usage.status, 0)
   assert.match(usage.stderr, /Usage: node scripts\/docker-healthcheck\.mjs web\|worker/)
 
-  const web = spawnCli(['web'])
-  assert.notEqual(web.status, 0)
+  const unavailableFetchOverride = 'globalThis.fetch=()=>Promise.reject(new Error("unavailable"))'
+  const webUnavailable = spawnCli(['web'], {}, nodeImportDataModule(unavailableFetchOverride))
+  assert.notEqual(webUnavailable.status, 0)
+  assert.match(webUnavailable.stderr, /unavailable/)
+
+  const healthyFetchOverride =
+    'globalThis.fetch=()=>Promise.resolve(new Response(JSON.stringify({status:"ok"}),{status:200}))'
+  const webHealthy = spawnCli(['web'], {}, nodeImportDataModule(healthyFetchOverride))
+  assert.equal(webHealthy.status, 0, webHealthy.stderr)
 })
 
 test('worker poll loop writes a heartbeat and removes it on stop without touching the ready signal', async () => {
@@ -229,11 +236,15 @@ function inspectHeartbeat(payload: { status: string; checkedAt: number; pollMs: 
   return inspectWorkerHeartbeat({ content: JSON.stringify(payload), nowMs })
 }
 
-function spawnCli(args: string[], extraEnv: Record<string, string> = {}) {
-  return spawnSync(process.execPath, [healthcheckScript, ...args], {
+function spawnCli(args: string[], extraEnv: Record<string, string> = {}, nodeArguments: string[] = []) {
+  return spawnSync(process.execPath, [...nodeArguments, healthcheckScript, ...args], {
     encoding: 'utf8',
     env: { ...process.env, ...extraEnv },
   })
+}
+
+function nodeImportDataModule(source: string) {
+  return ['--import', `data:text/javascript,${encodeURIComponent(source)}`]
 }
 
 async function waitFor(predicate: () => boolean) {

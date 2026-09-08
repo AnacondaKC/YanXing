@@ -15,7 +15,9 @@ import {
   TrendingUp,
   Upload,
 } from 'lucide-react'
-import { useMemo, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react'
+import { OverviewActivitySkeleton, OverviewDataRegion, OverviewMetricSkeleton, OverviewQualitySkeleton, OverviewSkeleton } from '@/components/overview-loading'
+import { combineOverviewLoadStates, type OverviewLoadState } from '@/lib/overview-loading'
 import { EmptyState } from '@/components/ui/empty-state'
 import { formatCharacters, formatDate, formatMetric, formatRelativeTime, scoreTextClass } from '@/lib/format'
 import { cumulativeTrend, runningAverageValues, trendDirectionOf, type TrendDirection } from '@/lib/overview-trends'
@@ -451,7 +453,11 @@ function StatTrendSparkline({ points, gradientId }: { points: number[]; gradient
   )
 }
 
+const OVERVIEW_ENTRANCE_SETTLE_MS = 650
+
 export function OverviewWorkspace({
+  projectsState,
+  statsState,
   projects,
   stats: overviewStats,
   recentReports,
@@ -463,6 +469,8 @@ export function OverviewWorkspace({
   onNavigate,
   onOpenReport,
 }: {
+  projectsState: OverviewLoadState
+  statsState: OverviewLoadState
   projects: ProjectWithCapabilities[]
   stats?: OverviewStats
   recentReports: ReportWithProject[]
@@ -474,6 +482,16 @@ export function OverviewWorkspace({
   onNavigate: (nav: 'reports' | 'knowledge') => void
   onOpenReport: (report: ReportWithProject, project: ProjectWithCapabilities) => void
 }) {
+  const [entering, setEntering] = useState(true)
+  const combinedState = combineOverviewLoadStates(projectsState, statsState)
+
+  useEffect(() => {
+    if (!entering || projectsState === 'loading' || statsState === 'loading') return
+    // Let the last ready region finish, then prevent later data updates from replaying entry.
+    const timer = window.setTimeout(() => setEntering(false), OVERVIEW_ENTRANCE_SETTLE_MS)
+    return () => window.clearTimeout(timer)
+  }, [entering, projectsState, statsState])
+
   const analyzedProjects = useMemo(() => projects.filter((project) => project.latestReport?.aiScore !== undefined), [projects])
   const { averageAiScore, averageCompleteness } = useMemo(() => {
     if (!analyzedProjects.length) return { averageAiScore: 0, averageCompleteness: 0 }
@@ -569,10 +587,10 @@ export function OverviewWorkspace({
     }
   }, [activeProjects, analyzedProjects.length, atRiskProjects, overviewStats?.trends.averageScore, overviewStats?.trends.versions, recentReports])
   const heroKpis = [
-    { label: '在研课题', value: String(activeProjects.length), trend: heroTrendByLabel.在研课题 },
-    { label: '报告版本', value: String(overviewStats?.totalReportVersions ?? 0), trend: heroTrendByLabel.报告版本 },
-    { label: '平均AI评分', value: analyzedProjects.length ? String(averageAiScore) : '--', trend: heroTrendByLabel.平均AI评分 },
-    { label: '需关注', value: String(atRiskCount), highlight: atRiskCount > 0, trend: heroTrendByLabel.需关注 },
+    { label: '在研课题', state: projectsState, value: String(activeProjects.length), trend: heroTrendByLabel.在研课题 },
+    { label: '报告版本', state: statsState, value: String(overviewStats?.totalReportVersions ?? 0), trend: heroTrendByLabel.报告版本 },
+    { label: '平均AI评分', state: projectsState, value: analyzedProjects.length ? String(averageAiScore) : '--', trend: heroTrendByLabel.平均AI评分 },
+    { label: '需关注', state: projectsState, value: String(atRiskCount), highlight: atRiskCount > 0, trend: heroTrendByLabel.需关注 },
   ]
 
   const trendByKind: Record<StatCardKind, number[]> = {
@@ -614,7 +632,7 @@ export function OverviewWorkspace({
   ])
 
   return (
-    <div className="space-y-6">
+    <div className="yx-overview space-y-6" data-enter={entering}>
       <h1 className="sr-only">总览</h1>
       {upstreamError && <div role="status" className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">{upstreamError}</div>}
       {/* ═══ 英雄区：品牌渐变横幅 ═══ */}
@@ -626,20 +644,22 @@ export function OverviewWorkspace({
 
         <div className="relative flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
           <div className="min-w-0">
+            <div className="yx-overview-intro">
             <p className="text-[11px] font-medium uppercase tracking-[0.22em] text-white/70">{now.getFullYear()} 年 {now.getMonth() + 1} 月 {now.getDate()} 日 · 星期{weekDay}</p>
             <h2 className="mt-2.5 text-2xl font-bold tracking-tight sm:text-[28px]">{greetingOf(now)}{userName ? `，${userName}` : ''}</h2>
-            <p className="mt-1.5 max-w-xl text-[12.5px] leading-6 text-white/80">{dynamicSubtitle}</p>
-            <div className="mt-5 flex flex-wrap items-center gap-2.5">
+            </div>
+            <p className="yx-overview-summary mt-1.5 min-h-6 max-w-xl text-[12.5px] leading-6 text-white/80">{combinedState === 'ready' ? dynamicSubtitle : '查看课题进展、报告成果与研究资料。'}</p>
+            <div className="yx-overview-actions mt-5 flex flex-wrap items-center gap-2.5">
               <button type="button" onClick={() => onNavigate('reports')} className="flex items-center gap-1.5 rounded-full bg-yx-paper px-4 py-2 text-[11px] font-bold text-yx-brand-hover shadow-lg shadow-black/10 transition-colors hover:bg-white/80"><ArrowUpRight className="h-3.5 w-3.5 text-yx-brand-hover" />进入报告库</button>
               <button type="button" onClick={() => onNavigate('knowledge')} className="flex items-center gap-1.5 rounded-full border border-white/25 bg-white/10 px-4 py-2 text-[11px] font-semibold text-white backdrop-blur transition-colors hover:bg-white/20">进入知识库<ArrowUpRight className="h-3.5 w-3.5 text-white" /></button>
             </div>
           </div>
-          <div className="flex shrink-0 divide-x divide-white/15 rounded-lg border border-white/15 bg-white/[0.07] backdrop-blur-sm">
+          <div className="yx-overview-kpis flex shrink-0 divide-x divide-white/15 rounded-lg border border-white/15 bg-white/[0.07] backdrop-blur-sm">
             {heroKpis.map((kpi) => (
               <div key={kpi.label} className="px-4 py-3.5 text-center sm:px-6">
                 <div className="flex items-center justify-center gap-1.5">
-                  <div className={`text-xl font-bold tabular-nums sm:text-2xl ${kpi.highlight ? 'text-amber-300' : 'text-white'}`}>{kpi.value}</div>
-                  <HeroTrendMark direction={kpi.trend} />
+                  <div className={`text-xl font-bold tabular-nums sm:text-2xl ${kpi.highlight ? 'text-amber-300' : 'text-white'}`}>{kpi.state === 'loading' ? <span role="status" aria-label={kpi.label + '正在加载'}><OverviewSkeleton className="yx-overview-skeleton-on-brand h-6 w-9 sm:h-8" /></span> : kpi.state === 'error' ? <span aria-label={kpi.label + '暂时无法加载'}>--</span> : kpi.value}</div>
+                  {kpi.state === 'ready' && <HeroTrendMark direction={kpi.trend} />}
                 </div>
                 <div className="mt-0.5 text-[9.5px] font-medium tracking-wide text-white/70">{kpi.label}</div>
               </div>
@@ -650,16 +670,18 @@ export function OverviewWorkspace({
 
       {/* ═══ 趋势指标卡 ═══ */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 sm:gap-4">
-        {statCards.map((stat) => (
-          <div key={stat.label} className="relative overflow-hidden rounded-lg border border-yx-line bg-yx-paper p-4 shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-[border-color,box-shadow] duration-200 hover:border-yx-brand/25 hover:shadow-[0_12px_28px_-14px_color-mix(in srgb, var(--yx-brand-strong) 25%, transparent)]">
+        {statCards.map((stat, index) => (
+          <div key={stat.label} style={{ '--overview-index': index } as CSSProperties} className="yx-overview-stat relative overflow-hidden rounded-lg border border-yx-line bg-yx-paper p-4 shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-[border-color,box-shadow] duration-200 hover:border-yx-brand/25 hover:shadow-[0_12px_28px_-14px_color-mix(in srgb, var(--yx-brand-strong) 25%, transparent)]">
             <StatCardDecoration kind={stat.kind} />
             <div className="relative z-10">
               <span className="text-[10px] font-semibold text-yx-muted">{stat.label}</span>
+              <OverviewDataRegion state={statsState} label={stat.label} placeholder={<OverviewMetricSkeleton />}>
               <div className="mt-2 flex items-end gap-6 pr-6">
                 <div className="text-[24px] font-bold leading-none tracking-tight text-yx-ink tabular-nums">{stat.value}</div>
                 <StatTrendSparkline points={trendByKind[stat.kind]} gradientId={"yxStatTrend-" + stat.kind} />
               </div>
               <div className="mt-1.5 truncate pr-12 text-[9.5px] text-yx-faint" title={stat.helper}>{stat.helper}</div>
+              </OverviewDataRegion>
             </div>
           </div>
         ))}
@@ -667,10 +689,11 @@ export function OverviewWorkspace({
 
       <div className="grid grid-cols-2 items-stretch gap-3 sm:gap-4 xl:grid-cols-4">
           {/* 分析质量全景 */}
-          <section aria-label="分析质量全景" className={`${PANEL_SHELL} col-span-2 h-full`}>
+          <section aria-label="分析质量全景" className={`${PANEL_SHELL} yx-overview-panel col-span-2 h-full`}>
             <PanelDecoration kind="quality" />
             <div className="relative z-10 pb-6">
-            <SectionHeader icon={Sparkles} title="分析质量全景" compact badge={projects.length ? `已分析 ${analyzedProjects.length}/${projects.length}` : undefined} />
+            <SectionHeader icon={Sparkles} title="分析质量全景" compact badge={projectsState === 'ready' && projects.length ? `已分析 ${analyzedProjects.length}/${projects.length}` : undefined} />
+            <OverviewDataRegion state={projectsState} label="分析质量" placeholder={<OverviewQualitySkeleton />}>
             <div className="mt-4 flex items-center gap-4">
               <ScoreGauge value={analyzedProjects.length ? averageAiScore : 0} empty={!analyzedProjects.length} />
               <div className="min-w-0 flex-1 space-y-2">
@@ -680,7 +703,7 @@ export function OverviewWorkspace({
                     <span className="text-lg font-bold leading-none tabular-nums text-yx-ink">{analyzedProjects.length ? `${averageCompleteness}%` : '--'}</span>
                   </div>
                   <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/90">
-                    <div className="h-full rounded-full bg-gradient-to-r from-yx-brand-bright to-yx-brand-hover transition-all duration-500" style={{ width: `${analyzedProjects.length ? Math.min(Math.max(averageCompleteness, 0), 100) : 0}%` }} />
+                    <div className="yx-overview-completeness-fill h-full rounded-full bg-gradient-to-r from-yx-brand-bright to-yx-brand-hover" style={{ width: `${analyzedProjects.length ? Math.min(Math.max(averageCompleteness, 0), 100) : 0}%` }} />
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-2">
@@ -756,16 +779,18 @@ export function OverviewWorkspace({
                 )}
               </div>
             )}
+            </OverviewDataRegion>
             </div>
           </section>
 
           {/* 最新报告动态 */}
-          <section aria-label="最新报告动态" className={`${PANEL_SHELL} col-span-2 h-full sm:col-span-1`}>
+          <section aria-label="最新报告动态" className={`${PANEL_SHELL} yx-overview-panel col-span-2 h-full sm:col-span-1`}>
             <PanelDecoration kind="reports" />
             <div className="relative z-10 flex h-full flex-col pb-8">
             <SectionHeader icon={Layers3} title="最新报告动态" compact action={(
               <button type="button" onClick={() => onNavigate('reports')} className="flex items-center gap-0.5 text-[10px] font-semibold text-yx-muted transition-colors hover:text-yx-brand-hover">报告库<ArrowRight className="h-3 w-3" /></button>
             )} />
+            <OverviewDataRegion state={combinedState} label="报告动态" layout="fill" placeholder={<OverviewActivitySkeleton />}>
             <MetricSparkRow
               label={recentReports.length ? `近 ${recentReports.length} 版平均分` : '近期平均分'}
               value={formatMetric(recentReportAverage)}
@@ -799,16 +824,18 @@ export function OverviewWorkspace({
             ) : (
               <EmptyState icon={Layers3} description="暂无课题动态，上传报告、更新课题或开始分析后将在此呈现。" className="mt-2 min-h-[8.5rem] flex-1 border-yx-line bg-yx-surface py-4" />
             )}
+            </OverviewDataRegion>
             </div>
           </section>
 
           {/* 知识库动态 */}
-          <section aria-label="知识库动态" className={`${PANEL_SHELL} col-span-2 h-full sm:col-span-1`}>
+          <section aria-label="知识库动态" className={`${PANEL_SHELL} yx-overview-panel col-span-2 h-full sm:col-span-1`}>
             <PanelDecoration kind="knowledge" />
             <div className="relative z-10 flex h-full flex-col pb-8">
             <SectionHeader icon={BookOpen} title="知识库动态" compact action={(
               <button type="button" onClick={() => onNavigate('knowledge')} className="flex items-center gap-0.5 text-[10px] font-semibold text-yx-muted transition-colors hover:text-yx-brand-hover">知识库<ArrowRight className="h-3 w-3" /></button>
             )} />
+            <OverviewDataRegion state={statsState} label="知识库动态" layout="fill" placeholder={<OverviewActivitySkeleton />}>
             <MetricSparkRow
               label="资料规模"
               value={String(knowledgeTotal).padStart(2, '0')}
@@ -832,6 +859,7 @@ export function OverviewWorkspace({
             ) : (
               <EmptyState icon={BookOpen} description="暂无参考资料，进入知识库上传行业研报与政策文件。" className="mt-2 min-h-[8.5rem] flex-1 border-yx-line bg-yx-surface py-4" />
             )}
+            </OverviewDataRegion>
             </div>
           </section>
       </div>
@@ -874,8 +902,8 @@ function ScoreGauge({ value, empty }: { value: number; empty?: boolean }) {
         <circle cx="60" cy="60" r={radius} fill="none" stroke="var(--yx-hover)" strokeWidth={strokeWidth} />
         {!empty && (
           <>
-            <circle cx="60" cy="60" r={radius} fill="none" stroke="url(#yxScoreGaugeGradient)" strokeWidth={strokeWidth} strokeLinecap="round" strokeDasharray={circumference} strokeDashoffset={offset} className="transition-all duration-700" />
-            <circle cx={knobX} cy={knobY} r="4" fill={value < 60 ? 'var(--yx-warning)' : 'var(--yx-brand-hover)'} stroke="var(--yx-paper)" strokeWidth="1.5" />
+            <circle cx="60" cy="60" r={radius} fill="none" stroke="url(#yxScoreGaugeGradient)" strokeWidth={strokeWidth} strokeLinecap="round" strokeDasharray={circumference} strokeDashoffset={offset} style={{ '--overview-ring-length': circumference, '--overview-ring-offset': offset } as CSSProperties} className="yx-overview-score-arc" />
+            <circle className="yx-overview-score-knob" cx={knobX} cy={knobY} r="4" fill={value < 60 ? 'var(--yx-warning)' : 'var(--yx-brand-hover)'} stroke="var(--yx-paper)" strokeWidth="1.5" />
           </>
         )}
       </svg>

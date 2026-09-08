@@ -1,5 +1,6 @@
 import type { LucideIcon } from 'lucide-react'
-import type { ReactNode } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
+import type { RepositoryDataState } from '@/components/repository-loading'
 
 export function CellCaption({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -19,6 +20,8 @@ export function RepositoryStatCell({
   points,
   trendLabel,
   gradientId,
+  dataState = 'ready',
+  entranceIndex = 0,
 }: {
   label: string
   value: string
@@ -28,15 +31,25 @@ export function RepositoryStatCell({
   points: number[]
   trendLabel: string
   gradientId: string
+  dataState?: RepositoryDataState
+  entranceIndex?: number
 }) {
   return (
-    <div className="min-w-0 bg-yx-paper px-3 py-3">
+    <div aria-busy={dataState === 'loading'} className="yx-repository-stat min-w-0 bg-yx-paper px-3 py-3" style={{ '--repository-index': Math.min(entranceIndex, 5) } as CSSProperties}>
       <div className="flex min-w-0 items-center gap-1.5 text-yx-muted" title={label}>
         <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-yx-brand-soft text-yx-brand">
           <Icon className="h-2.5 w-2.5" strokeWidth={1.75} />
         </span>
         <span className="truncate text-[10px] font-medium">{label}</span>
       </div>
+      {dataState === 'loading' ? (
+        <div role="status" aria-label={label + '正在加载'} className="mt-1.5 flex h-[22px] items-end justify-between gap-2">
+          <span aria-hidden="true" className="yx-repository-skeleton block h-[18px] w-14" />
+          <span aria-hidden="true" className="yx-repository-skeleton mb-0.5 block h-3 w-10" />
+        </div>
+      ) : dataState === 'error' ? (
+        <div aria-label={label + '暂时无法加载'} className="mt-1.5 h-[22px] text-[18px] leading-none text-yx-faint">--</div>
+      ) : (
       <div className="mt-1.5 flex items-end justify-between gap-2">
         <div className="min-w-0 truncate leading-none" title={`${value} ${unit}`.trim()}>
           <span className={`text-[18px] font-bold tracking-tight tabular-nums ${valueClassName ?? 'text-yx-ink'}`}>{value}</span>
@@ -44,6 +57,7 @@ export function RepositoryStatCell({
         </div>
         <RepositorySparkline points={points} gradientId={gradientId} label={trendLabel} />
       </div>
+      )}
     </div>
   )
 }

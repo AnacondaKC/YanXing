@@ -1,6 +1,7 @@
 export const DEFAULT_BRAND_DISPLAY_TEXT = '研行致远\n产业政策研究团队'
-export const DEFAULT_HEADER_LOGO_URL = '/研行LOGO-完整矢量平滑版.svg'
-export const DEFAULT_LOGIN_WATERMARK_URL = '/研行LOGO-完整矢量平滑版.svg'
+// React can include image URLs in HTTP preload headers, which require ASCII-safe paths.
+export const DEFAULT_HEADER_LOGO_URL = encodeURI('/研行LOGO-完整矢量平滑版.svg')
+export const DEFAULT_LOGIN_WATERMARK_URL = DEFAULT_HEADER_LOGO_URL
 export const MAX_BRAND_DISPLAY_TEXT_LENGTH = 60
 export const MAX_BRAND_ASSET_BYTES = 2 * 1024 * 1024
 

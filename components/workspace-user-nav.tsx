@@ -14,6 +14,7 @@ import type { SessionUser } from '@/modules/users/domain'
 export function TopbarUserNav({
   user,
   onSettings,
+  onSettingsIntent,
   onEditProfile,
   onSearch,
   onHelp,
@@ -21,6 +22,7 @@ export function TopbarUserNav({
 }: {
   user?: SessionUser
   onSettings: () => void
+  onSettingsIntent?: () => void
   onEditProfile: () => void
   onSearch?: () => void
   onHelp?: () => void
@@ -61,7 +63,7 @@ export function TopbarUserNav({
       ) : null}
       {user ? <NotificationCenter user={user} refreshKey={notificationRefreshKey} /> : null}
       {user?.role === 'admin' ? (
-        <Button variant="icon" onClick={onSettings} aria-label="主要设置" title="主要设置" className="rounded-lg">
+        <Button variant="icon" onClick={onSettings} onPointerEnter={onSettingsIntent} onFocus={onSettingsIntent} onPointerDown={onSettingsIntent} aria-label="主要设置" title="主要设置" className="rounded-lg">
           <Settings className="h-4 w-4" />
         </Button>
       ) : null}

@@ -3,7 +3,7 @@ import { parseReportMaxUploadBytes, reportMaxUploadBytes, resolveProxyClientMaxB
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   distDir: process.env.YANXING_NEXT_DIST_DIR ?? '.next',
-  allowedDevOrigins: ['127.0.0.1', 'yanxing.iniko.cc'],
+  allowedDevOrigins: ['127.0.0.1', '192.168.7.9', 'yanxing.iniko.cc'],
   serverExternalPackages: ['pdf-parse'],
   devIndicators: false,
   experimental: {

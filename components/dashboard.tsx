@@ -2,10 +2,13 @@
 
 import dynamic from 'next/dynamic'
 import { Menu } from 'lucide-react'
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { OverviewWorkspace } from '@/components/overview-workspace'
+import { settleOverviewLoadState, type OverviewLoadState } from '@/lib/overview-loading'
+import { reportLoadState, type ReportListResult } from '@/lib/report-load-state'
 import { WorkspacePageHeader, WorkspaceTopbar } from '@/components/workspace-shell'
 import { TopbarUserNav } from '@/components/workspace-user-nav'
+import { WorkspaceDialogLoading } from '@/components/workspace-dialog-loading'
 import { ProjectExecutiveHeader, ProjectSideNav, type ProjectTabId } from '@/components/project-executive-header'
 import { BrandLogo } from '@/components/workspace-brand'
 import { MainNavigationPanel } from '@/components/workspace-navigation'
@@ -97,6 +100,13 @@ const ReportsRepositoryWorkspace = dynamic(() => import('@/components/reports-re
 const KnowledgeBaseWorkspace = dynamic(() => import('@/components/knowledge-base').then((module) => module.KnowledgeBaseWorkspace), { loading: ViewLoading })
 const WorkspaceDialogs = dynamic(() => import('@/components/workspace-dialogs').then((module) => module.WorkspaceDialogs))
 
+function preloadWorkspaceDialogs() {
+  // Speculative failures must not prevent a later click from retrying the import.
+  void import('@/components/workspace-dialogs').catch(() => {})
+}
+
+const DIALOG_PRELOAD_IDLE_TIMEOUT_MS = 1_500
+
 export default function Dashboard() {
   const [view, setView] = useState<PageView>('overview')
   const [projects, setProjects] = useState<ProjectWithCapabilities[]>([])
@@ -108,6 +118,16 @@ export default function Dashboard() {
   const [notificationRefreshKey, setNotificationRefreshKey] = useState(0)
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
   const [currentUser, setCurrentUser] = useState<SessionUser>()
+
+  useEffect(() => {
+    if (currentUser?.role !== 'admin') return
+    if (typeof window.requestIdleCallback === 'function') {
+      const idleId = window.requestIdleCallback(preloadWorkspaceDialogs, { timeout: DIALOG_PRELOAD_IDLE_TIMEOUT_MS })
+      return () => window.cancelIdleCallback(idleId)
+    }
+    const timer = window.setTimeout(preloadWorkspaceDialogs, DIALOG_PRELOAD_IDLE_TIMEOUT_MS)
+    return () => window.clearTimeout(timer)
+  }, [currentUser?.role])
   const { notice, showNotice } = useToast()
   const requestNotificationRefresh = useCallback(() => setNotificationRefreshKey((key) => key + 1), [])
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -126,6 +146,7 @@ export default function Dashboard() {
   const [analysisJob, setAnalysisJob] = useState<AnalysisJob>()
   const [analysisModuleStates, setAnalysisModuleStates] = useState<AnalysisModuleState[]>([])
   const [reportReloadKey, setReportReloadKey] = useState(0)
+  const [reportListResult, setReportListResult] = useState<ReportListResult>()
   const [editTarget, setEditTarget] = useState<ProjectWithCapabilities | undefined>()
   const [deleteTarget, setDeleteTarget] = useState<ProjectWithCapabilities | undefined>()
   const [deleteReportTarget, setDeleteReportTarget] = useState<ReportVersion | undefined>()
@@ -333,6 +354,8 @@ export default function Dashboard() {
   const fullAnalysisRunning = Boolean(activeJobId) && (!analysisJob || activeAnalysisJobStatuses.has(analysisJob.status))
   const displaySnapshot = analysisSnapshot ?? EMPTY_SNAPSHOT
   const [overviewStats, setOverviewStats] = useState<OverviewStats>()
+  const [overviewProjectsState, setOverviewProjectsState] = useState<OverviewLoadState>('loading')
+  const [overviewStatsState, setOverviewStatsState] = useState<OverviewLoadState>('loading')
   const [overviewLoadError, setOverviewLoadError] = useState('')
   const [overviewRecentReports, setOverviewRecentReports] = useState<ReportWithProject[]>([])
   const [overviewActivityReports, setOverviewActivityReports] = useState<ReportWithProject[]>([])
@@ -356,10 +379,12 @@ export default function Dashboard() {
       if (!controller.signal.aborted && requestSequence === projectsRequestSequenceRef.current) {
         setProjects(result.items)
         setProjectsLoaded(true)
+        setOverviewProjectsState('ready')
       }
     } catch {
       if (!controller.signal.aborted && requestSequence === projectsRequestSequenceRef.current) {
         setProjectsLoaded(true)
+        setOverviewProjectsState((current) => settleOverviewLoadState(current, 'failure'))
         showNotice('课题列表读取失败，请稍后重试。')
       }
     } finally {
@@ -392,13 +417,15 @@ export default function Dashboard() {
         recentKnowledge?: KnowledgeItem[]
       } | null
       if (controller.signal.aborted || requestSequence !== statsRequestSequenceRef.current) return
-      if (!data?.stats) {
-        setOverviewLoadError('概览统计刷新失败，已保留上次成功加载的内容。')
-        showNotice('概览统计刷新失败，已保留上次成功加载的内容。')
+      if (!response?.ok || !data?.stats) {
+        setOverviewStatsState((current) => settleOverviewLoadState(current, 'failure'))
+        setOverviewLoadError('概览统计读取失败，请稍后重试；已有内容将继续保留。')
+        showNotice('概览统计读取失败，请稍后重试。')
         return
       }
       setOverviewLoadError('')
       setOverviewStats(data.stats)
+      setOverviewStatsState('ready')
       setOverviewRecentReports(data.recentReports ?? [])
       setOverviewActivityReports(data.activityReports ?? [])
       setOverviewRecentKnowledge(data.recentKnowledge ?? [])
@@ -452,6 +479,7 @@ export default function Dashboard() {
     ])
       .then(([{ items }, requested]) => {
         if (cancelled || reportListSequenceRef.current !== requestSequence) return
+        setReportListResult({ projectId: activeProject.id, reloadKey: reportReloadKey, status: 'ready' })
         const latest = items[0]
         const active = requested?.projectId === activeProject.id ? requested : latest
         if (active) {
@@ -471,7 +499,9 @@ export default function Dashboard() {
         }
       })
       .catch(() => {
-        if (!cancelled) showNotice('报告列表刷新失败，已保留当前数据。')
+        if (cancelled || reportListSequenceRef.current !== requestSequence) return
+        setReportListResult({ projectId: activeProject.id, reloadKey: reportReloadKey, status: 'error' })
+        showNotice('报告列表刷新失败，已保留当前数据。')
       })
     return () => {
       cancelled = true
@@ -906,7 +936,7 @@ export default function Dashboard() {
             </div>
           </div>
         }
-        tools={<TopbarUserNav user={currentUser} onSettings={() => setSettingsOpen(true)} onEditProfile={() => setEditProfileOpen(true)} onSearch={openSearch} onHelp={() => setHelpOpen(true)} notificationRefreshKey={notificationRefreshKey} />}
+        tools={<TopbarUserNav user={currentUser} onSettings={() => setSettingsOpen(true)} onSettingsIntent={preloadWorkspaceDialogs} onEditProfile={() => setEditProfileOpen(true)} onSearch={openSearch} onHelp={() => setHelpOpen(true)} notificationRefreshKey={notificationRefreshKey} />}
       />
 
       {/* Main Workspace Section */}
@@ -957,7 +987,10 @@ export default function Dashboard() {
                   {view === 'dashboard' && (
                     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
                     <DashboardView
+                      key={activeProject.id}
                       project={activeProject}
+                      reportState={reportLoadState({ projectId: activeProject.id, reloadKey: reportReloadKey, report: activeReport, result: reportListResult })}
+                      onRetryReportLoad={() => setReportReloadKey((key) => key + 1)}
                       report={activeReport}
                       snapshot={displaySnapshot}
                       analyzing={fullAnalysisRunning}
@@ -1031,6 +1064,8 @@ export default function Dashboard() {
                 )}
                 {view === 'overview' && (
                   <OverviewWorkspace
+                    projectsState={overviewProjectsState}
+                    statsState={overviewStatsState}
                     projects={listedProjects}
                     stats={overviewStats}
                     recentReports={overviewRecentReports}
@@ -1085,6 +1120,7 @@ export default function Dashboard() {
 
       {notice && <Toast message={notice} />}
       {hasOpenDialog && (
+      <Suspense fallback={<WorkspaceDialogLoading onClose={settingsOpen ? () => setSettingsOpen(false) : undefined} />}>
       <WorkspaceDialogs
         currentUser={currentUser}
         users={users}
@@ -1163,6 +1199,7 @@ export default function Dashboard() {
         }}
         onReportUploaded={acceptUploadedReport}
       />
+      </Suspense>
       )}
     </main>
   )

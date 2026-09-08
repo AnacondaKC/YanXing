@@ -1,10 +1,12 @@
 'use client'
 
-import { BookOpen, Building2, CalendarPlus, ChevronDown, ChevronRight, Download, FolderOpen, GraduationCap, HardDrive, Landmark, Layers3, LineChart, Loader2, Search, Trash2, Upload, UserRound } from 'lucide-react'
+import { BookOpen, Building2, CalendarPlus, ChevronDown, ChevronRight, Download, FolderOpen, GraduationCap, HardDrive, Landmark, Layers3, LineChart, Search, Trash2, Upload, UserRound } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { Button } from '@/components/ui/button'
 import { CardAura, GroupCardDecoration } from '@/components/ui/card-decoration'
+import { RepositoryLoading, type RepositoryDataState } from '@/components/repository-loading'
+import { useRepositoryEntrance } from '@/components/use-repository-entrance'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Dialog, DialogBody, DialogFooter, DialogHeader } from '@/components/ui/dialog'
 import { EmptyState } from '@/components/ui/empty-state'
@@ -60,7 +62,11 @@ export function KnowledgeBaseWorkspace({
 }) {
   const [items, setItems] = useState<KnowledgeItem[]>([])
   const [loading, setLoading] = useState(true)
+  const [hasLoaded, setHasLoaded] = useState(false)
+  const { entering, finishEntrance } = useRepositoryEntrance(loading)
   const [loadError, setLoadError] = useState('')
+  const initialLoading = loading && !hasLoaded
+  const dataState: RepositoryDataState = hasLoaded ? 'ready' : loading ? 'loading' : 'error'
   const [search, setSearch] = useState('')
   const [categoryFilter, setCategoryFilter] = useState('all')
   const [expandedCategoryIds, setExpandedCategoryIds] = useState<string[]>([])
@@ -85,11 +91,12 @@ export function KnowledgeBaseWorkspace({
       const result = await fetchAllPages<KnowledgeItem>('/api/knowledge', 'items', { cache: 'no-store', signal: controller.signal })
       if (controller.signal.aborted || requestSequence !== loadSequenceRef.current) return
       setItems(result.items)
+      setHasLoaded(true)
       onKnowledgeCountChangeRef.current?.()
       setLoadError('')
     } catch {
       if (controller.signal.aborted || requestSequence !== loadSequenceRef.current) return
-      setLoadError('知识库刷新失败，已保留上次成功加载的内容。')
+      setLoadError('知识库读取失败，请重试；已加载的内容会继续保留。')
     } finally {
       if (loadControllerRef.current === controller) loadControllerRef.current = undefined
       if (!controller.signal.aborted && requestSequence === loadSequenceRef.current) setLoading(false)
@@ -206,7 +213,7 @@ export function KnowledgeBaseWorkspace({
   }
 
   return (
-    <div className="space-y-6">
+    <div className="yx-repository space-y-6" data-enter={entering} onInputCapture={finishEntrance} onClickCapture={finishEntrance} onKeyDownCapture={finishEntrance}>
       <h1 className="sr-only">知识库</h1>
       {loadError && (
         <div role="alert" className="flex items-center justify-between gap-3 rounded-lg border border-yx-warning/25 bg-yx-warning-soft px-4 py-3 text-xs text-yx-warning-text">
@@ -221,12 +228,12 @@ export function KnowledgeBaseWorkspace({
           <CardAura showTopHighlight={false} />
         </div>
         <div className="relative z-10">
-          <div className="flex min-h-8 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="yx-repository-intro flex min-h-8 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <h2 className="flex min-w-0 items-center gap-2 text-[13px] font-bold text-yx-ink">
               <BookOpen className="h-[17px] w-[17px] shrink-0 text-yx-muted" />
               知识库
               <span className="rounded-full bg-yx-surface px-2 py-0.5 text-[9.5px] font-semibold text-yx-muted ring-1 ring-yx-line">
-                {filteredItems.length} 份资料 · {groupedItems.length} 个分类
+                {hasLoaded ? `${filteredItems.length} 份资料 · ${groupedItems.length} 个分类` : initialLoading ? '正在加载…' : '暂未加载'}
               </span>
             </h2>
             <button
@@ -239,7 +246,7 @@ export function KnowledgeBaseWorkspace({
             </button>
           </div>
 
-          <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center">
+          <div className="yx-repository-filters mt-4 flex flex-col gap-3 sm:flex-row sm:items-center">
             <div className="relative max-w-sm flex-1">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-yx-faint" />
               <input
@@ -266,30 +273,17 @@ export function KnowledgeBaseWorkspace({
           <div className="mt-4 overflow-hidden rounded-lg border border-yx-line">
             <div className="grid grid-cols-2 gap-px bg-yx-line sm:grid-cols-4">
               {knowledgeStats.map((stat, index) => (
-                <RepositoryStatCell key={stat.label} gradientId={'yx-knowledge-trend-' + index} {...stat} />
+                <RepositoryStatCell key={stat.label} dataState={dataState} entranceIndex={index} gradientId={'yx-knowledge-trend-' + index} {...stat} />
               ))}
             </div>
           </div>
         </div>
       </section>
 
-      {loading ? (
-        <div className="space-y-3">
-          <div className="flex items-center gap-2 text-[11px] text-yx-muted">
-            <Loader2 className="h-3.5 w-3.5 animate-spin text-yx-brand" />
-            正在加载知识库...
-          </div>
-          {[0, 1].map((key) => (
-            <div key={key} className="overflow-hidden rounded-lg border border-yx-line bg-yx-paper">
-              <div className="flex items-center gap-3 px-4 py-3">
-                <span className="h-4 w-4 rounded-full bg-yx-hover" />
-                <span className="h-4 w-36 rounded-full bg-yx-hover" />
-                <span className="ml-auto h-4 w-48 rounded-full bg-yx-hover" />
-              </div>
-            </div>
-          ))}
-        </div>
-      ) : groupedItems.length > 0 ? (
+      <div aria-busy={loading} className={initialLoading ? undefined : 'yx-repository-content'}>
+      {initialLoading ? (
+        <RepositoryLoading label="知识库" />
+      ) : !hasLoaded && loadError ? null : groupedItems.length > 0 ? (
         <div className="space-y-4">
           {groupedItems.map((group, groupIndex) => {
             const CategoryIcon = categoryIcon(group.category)
@@ -444,11 +438,14 @@ export function KnowledgeBaseWorkspace({
         />
       )}
 
+      </div>
+
       {uploadOpen && (
         <UploadKnowledgeDialog
           onClose={() => setUploadOpen(false)}
           onUploaded={(newItem) => {
             setItems((current) => [newItem, ...current])
+            setHasLoaded(true)
             setCategoryFilter('all')
             onKnowledgeCountChangeRef.current?.()
             setUploadOpen(false)

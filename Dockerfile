@@ -16,7 +16,7 @@ ENV NEXT_TELEMETRY_DISABLED=1 \
 RUN pnpm build && node scripts/docker-runtime-config.mjs --write-build-config
 
 FROM dependencies AS production-dependencies
-RUN pnpm prune --prod
+RUN CI=true pnpm prune --prod
 
 FROM ${NODE_IMAGE} AS runtime
 WORKDIR /app

@@ -27,6 +27,15 @@ test('Docker and environment examples use the same Node and pnpm baseline', asyn
   }
 })
 
+test('production dependency pruning is non-interactive without setting runtime CI', async () => {
+  const dockerfile = await readProjectFile('Dockerfile')
+  const productionStage = dockerfile.split('FROM dependencies AS production-dependencies')[1]?.split('FROM ')[0]
+  assert.ok(productionStage?.includes('RUN CI=true pnpm prune --prod'))
+  const runtimeStage = dockerfile.split(' AS runtime')[1]
+  assert.ok(runtimeStage)
+  assert.doesNotMatch(runtimeStage, /\bCI\s*=/)
+})
+
 test('CI reads the repository Node baseline and packageManager without publishing images', async () => {
   const workflow = await readProjectFile('.github/workflows/ci.yml')
   assert.equal((workflow.match(/node-version-file: \.nvmrc/g) ?? []).length, 2)

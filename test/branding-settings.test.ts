@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { validateHeaderValue } from 'node:http'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -45,6 +46,14 @@ async function readSettings(response: Response) {
   const body = await response.json() as { settings: PublicBrandSettings }
   return body.settings
 }
+
+test('default brand image URLs are safe for HTTP preload headers', () => {
+  for (const url of [DEFAULT_HEADER_LOGO_URL, DEFAULT_LOGIN_WATERMARK_URL]) {
+    assert.doesNotThrow(() => validateHeaderValue('Link', '<' + url + '>; rel=preload; as=image'))
+    assert.equal(decodeURI(url), '/研行LOGO-完整矢量平滑版.svg')
+    assert.equal(new URL(url, 'http://localhost').pathname, url)
+  }
+})
 
 test('brand display text normalization enforces non-empty text and two lines', () => {
   assert.equal(normalizeBrandDisplayText(' 研行产业政策 \r\n 研究团队 '), '研行产业政策\n研究团队')

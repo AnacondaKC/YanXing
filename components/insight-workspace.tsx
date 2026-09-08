@@ -2,6 +2,7 @@
 
 import { AlertCircle, Clock3, Loader2, Maximize2, Minimize2, RefreshCw, Sparkles, Upload } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useWorkspaceEntrance } from '@/components/use-workspace-entrance'
 import type { ProjectTabId } from '@/components/project-executive-header'
 import { useDialogFocus } from '@/components/use-dialog-focus'
 import { apiFetch, mutationHeaders } from '@/lib/client-request'
@@ -68,7 +69,8 @@ export function InsightWorkspace({
   onNavigate?: (tab: ProjectTabId) => void
 }) {
   const [insight, setInsight] = useState<ReportInsight>()
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(Boolean(report))
+  const { entranceProps } = useWorkspaceEntrance(loading)
   const [generating, setGenerating] = useState(false)
   const [error, setError] = useState('')
   const [expanded, setExpanded] = useState(false)
@@ -267,9 +269,10 @@ export function InsightWorkspace({
     }
   }
 
-  if (loading) return <InsightLoadingState />
+  if (loading) return <div {...entranceProps} className="yx-detail flex min-h-0 min-w-0 flex-1 flex-col"><InsightLoadingState /></div>
   if (!insight) {
     return (
+      <div {...entranceProps} className="yx-detail flex min-h-0 min-w-0 flex-1 flex-col">
       <InsightEmptyState
         report={report}
         canManage={canManage}
@@ -279,19 +282,21 @@ export function InsightWorkspace({
         onGenerate={() => void generateInsight()}
         onNavigate={onNavigate}
       />
+      </div>
     )
   }
 
   return (
     <section
+      {...entranceProps}
       ref={workspaceRef}
       role={expanded ? 'dialog' : undefined}
       aria-modal={expanded ? true : undefined}
       aria-label="报告洞察阅读器"
       tabIndex={expanded ? -1 : undefined}
-      className={`flex min-w-0 flex-col overflow-hidden bg-[var(--yx-canvas)] ${expanded ? 'fixed inset-0 z-50 h-[100dvh] w-screen p-2 sm:p-4' : 'relative min-h-[650px] rounded-lg lg:min-h-0 lg:flex-1 lg:rounded-lg'}`}
+      className={`yx-detail flex min-w-0 flex-col overflow-hidden bg-[var(--yx-canvas)] ${expanded ? 'fixed inset-0 z-50 h-[100dvh] w-screen p-2 sm:p-4' : 'relative min-h-[650px] rounded-lg lg:min-h-0 lg:flex-1 lg:rounded-lg'}`}
     >
-      <div aria-label="阅读工具" className={`flex h-11 shrink-0 items-center justify-between border-b border-yx-line bg-yx-paper px-3 ${expanded ? 'rounded-t-xl sm:px-5' : 'sm:px-4'}`}>
+      <div aria-label="阅读工具" className={`yx-detail-intro flex h-11 shrink-0 items-center justify-between border-b border-yx-line bg-yx-paper px-3 ${expanded ? 'rounded-t-xl sm:px-5' : 'sm:px-4'}`}>
         <div className="flex min-w-0 items-center gap-3 text-[10px] font-semibold text-yx-muted">
           <span className="flex items-center gap-1.5"><Clock3 className="h-3.5 w-3.5" />约 {insight.readingMinutes} 分钟</span>
           <span className="text-[var(--yx-brand)]">{readingProgress}%</span>
@@ -319,7 +324,7 @@ export function InsightWorkspace({
         referrerPolicy="no-referrer"
         srcDoc={renderedInsightHtml}
         onLoad={handleFrameLoad}
-        className="block min-h-0 w-full flex-1 border-0 bg-yx-paper"
+        className="yx-detail-reader block min-h-0 w-full flex-1 border-0 bg-yx-paper"
       />
     </section>
   )
@@ -327,7 +332,7 @@ export function InsightWorkspace({
 
 function InsightLoadingState() {
   return (
-    <div className="flex min-h-[560px] flex-1 items-center justify-center rounded-lg bg-yx-paper sm:rounded-lg">
+    <div className="yx-detail-still-loading flex min-h-[560px] flex-1 items-center justify-center rounded-lg bg-yx-paper sm:rounded-lg">
       <div className="text-center"><Loader2 className="mx-auto h-6 w-6 animate-spin text-[var(--yx-brand)]" /><p className="mt-3 text-[10px] text-yx-muted">正在载入报告洞察</p></div>
     </div>
   )
@@ -360,7 +365,7 @@ function InsightEmptyState({
   const copy = insightEmptyCopy(kind)
 
   return (
-    <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
+    <div className="yx-detail-content flex h-full min-h-0 min-w-0 flex-1 flex-col">
       <div className="relative flex h-full min-h-0 w-full flex-1 flex-col overflow-hidden rounded-lg border border-yx-line bg-yx-paper p-6 shadow-xs sm:p-10 lg:p-12">
         <div aria-hidden="true" className="pointer-events-none absolute -right-24 -top-24 h-96 w-96 rounded-full bg-yx-brand/8 blur-3xl" />
         <div aria-hidden="true" className="pointer-events-none absolute -bottom-24 -left-20 h-80 w-80 rounded-full bg-yx-brand/5 blur-2xl" />

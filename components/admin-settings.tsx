@@ -2,12 +2,8 @@
 
 import { Check, FileCode2, FolderKanban, Gauge, Layers3, Network, Palette, Settings, Users, type LucideIcon } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { AdminModelSettings } from '@/components/admin/model-settings'
-import { AiBudgetSettingsPanel } from '@/components/admin/ai-budget-settings'
-import { BrandingSettingsPanel } from '@/components/admin/branding-settings'
 import { ProjectManagementSettings } from '@/components/admin/project-management-settings'
-import { UserManagementSettings } from '@/components/admin/user-management-settings'
-import { PromptSettings } from '@/components/prompt-settings'
+import { createRetryableSettingsPanel } from '@/components/retryable-settings-panel'
 import { AI_PROMPT_TARGETS } from '@/lib/ai/prompt-defaults'
 import { Dialog, DialogCloseButton } from '@/components/ui/dialog'
 import { useToast } from '@/components/use-toast'
@@ -15,6 +11,12 @@ import { apiFetch } from '@/lib/client-request'
 import type { ProjectWithCapabilities } from '@/modules/projects/domain'
 import type { ManagedUser, SessionUser } from '@/modules/users/domain'
 import { modelSelectionTargets, type AiModelSettings } from '@/components/admin/ai-settings-types'
+
+const AdminModelSettings = createRetryableSettingsPanel(() => import('@/components/admin/model-settings').then((module) => module.AdminModelSettings))
+const AiBudgetSettingsPanel = createRetryableSettingsPanel(() => import('@/components/admin/ai-budget-settings').then((module) => module.AiBudgetSettingsPanel))
+const BrandingSettingsPanel = createRetryableSettingsPanel(() => import('@/components/admin/branding-settings').then((module) => module.BrandingSettingsPanel))
+const UserManagementSettings = createRetryableSettingsPanel(() => import('@/components/admin/user-management-settings').then((module) => module.UserManagementSettings))
+const PromptSettings = createRetryableSettingsPanel(() => import('@/components/prompt-settings').then((module) => module.PromptSettings))
 
 type AdminSettingsPage = 'projects' | 'users' | 'branding' | 'channels' | 'selections' | 'prompts' | 'budget'
 type NavigationItem = { id: AdminSettingsPage; label: string; icon: LucideIcon; tag?: string }

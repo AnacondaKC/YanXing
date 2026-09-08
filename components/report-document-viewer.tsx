@@ -2,6 +2,7 @@
 
 import { AlertCircle, Download, ExternalLink, FileText, Loader2, Maximize2, Minimize2, RefreshCw } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useWorkspaceEntrance } from '@/components/use-workspace-entrance'
 import { isDarkTheme, YX_THEME_CHANGE_EVENT } from '@/components/theme-toggle'
 import { apiFetch } from '@/lib/client-request'
 import type { ReportVersion } from '@/modules/reports/domain'
@@ -44,7 +45,8 @@ body { overflow: auto; scrollbar-width: thin; scrollbar-color: rgba(15, 23, 42, 
 
 export function ReportDocumentViewer({ report }: { report?: ReportVersion }) {
   const [expanded, setExpanded] = useState(false)
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(Boolean(report))
+  const { entranceProps } = useWorkspaceEntrance(loading)
   const [error, setError] = useState('')
   const [reloadKey, setReloadKey] = useState(0)
   const [pdfAvailable, setPdfAvailable] = useState(false)
@@ -221,7 +223,7 @@ export function ReportDocumentViewer({ report }: { report?: ReportVersion }) {
   }, [docxFrameReady, fileUrl, isPdf, reloadKey, report?.fileHash, reportId])
 
   if (!report) {
-    return <DocumentViewerEmptyState />
+    return <div {...entranceProps} className="yx-detail flex min-h-0 min-w-0 flex-1 flex-col"><DocumentViewerEmptyState /></div>
   }
 
   const formatLabel = isPdf ? 'PDF' : 'DOCX'
@@ -229,14 +231,15 @@ export function ReportDocumentViewer({ report }: { report?: ReportVersion }) {
 
   return (
     <section
+      {...entranceProps}
       ref={workspaceRef}
       role={expanded ? 'dialog' : undefined}
       aria-modal={expanded ? true : undefined}
       aria-label="报告原文阅读器"
       tabIndex={expanded ? -1 : undefined}
-      className={`flex min-w-0 flex-col overflow-hidden bg-[var(--yx-canvas-inner)] ${expanded ? 'fixed inset-0 z-50 h-[100dvh] w-screen border border-[var(--yx-line)] p-2 sm:p-4' : 'relative h-[calc(100dvh-8.5rem)] min-h-[650px] rounded-lg border border-black/[0.04] shadow-2xs lg:h-auto lg:min-h-0 lg:flex-1'}`}
+      className={`yx-detail flex min-w-0 flex-col overflow-hidden bg-[var(--yx-canvas-inner)] ${expanded ? 'fixed inset-0 z-50 h-[100dvh] w-screen border border-[var(--yx-line)] p-2 sm:p-4' : 'relative h-[calc(100dvh-8.5rem)] min-h-[650px] rounded-lg border border-black/[0.04] shadow-2xs lg:h-auto lg:min-h-0 lg:flex-1'}`}
     >
-      <div className={`flex h-11 shrink-0 items-center justify-between border-b border-black/[0.04] bg-yx-paper px-3 ${expanded ? 'rounded-t-[4px] sm:px-5' : 'rounded-t-lg sm:px-4'}`}>
+      <div className={`yx-detail-intro flex h-11 shrink-0 items-center justify-between border-b border-black/[0.04] bg-yx-paper px-3 ${expanded ? 'rounded-t-[4px] sm:px-5' : 'rounded-t-lg sm:px-4'}`}>
         <div className="flex min-w-0 items-center gap-2.5">
           <FileText className="h-4 w-4 shrink-0 text-[var(--yx-brand)]" />
           <div className="min-w-0">
@@ -270,7 +273,7 @@ export function ReportDocumentViewer({ report }: { report?: ReportVersion }) {
           src={sourceUrl}
           referrerPolicy="no-referrer"
           onLoad={() => setLoading(false)}
-          className="min-h-0 w-full flex-1 border-0 bg-yx-paper"
+          className={`min-h-0 w-full flex-1 border-0 bg-yx-paper ${!loading && !error ? 'yx-detail-reader' : ''}`}
         />
       )}
       {!isPdf && (
@@ -282,7 +285,7 @@ export function ReportDocumentViewer({ report }: { report?: ReportVersion }) {
           referrerPolicy="no-referrer"
           srcDoc={docxFrameSrcDoc}
           onLoad={() => setDocxFrameReady(true)}
-          className="min-h-0 w-full flex-1 border-0 bg-[var(--yx-canvas-inner)]"
+          className={`min-h-0 w-full flex-1 border-0 bg-[var(--yx-canvas-inner)] ${!loading && !error ? 'yx-detail-reader' : ''}`}
         />
       )}
 
@@ -309,7 +312,7 @@ export function ReportDocumentViewer({ report }: { report?: ReportVersion }) {
 
 function DocumentViewerEmptyState() {
   return (
-    <div className="flex min-h-[560px] flex-1 items-center justify-center rounded-md bg-yx-paper p-6">
+    <div className="yx-detail-content flex min-h-[560px] flex-1 items-center justify-center rounded-md bg-yx-paper p-6">
       <div className="max-w-md text-center">
         <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-md bg-gray-100 text-gray-500"><FileText className="h-5 w-5" /></span>
         <h2 className="mt-4 text-base font-semibold text-yx-ink">尚未上传报告</h2>

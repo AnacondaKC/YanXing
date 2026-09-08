@@ -1711,3 +1711,377 @@ body {
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: 0.01ms !important; }
 }
+
+/* =========================================================================
+   Overview enter / chart / skeleton motion
+   Animates only under .yx-overview[data-enter="true"]. Default: visible.
+   No transforms on the overview root. Opacity + transform only (no filter /
+   box-shadow animation). Dark theme reuses --yx-hover / existing tokens.
+   ========================================================================= */
+
+.yx-overview {
+  --overview-rise: 6px;
+  --overview-stagger: 40ms;
+  --overview-ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+@media (max-width: 639px) {
+  .yx-overview {
+    --overview-rise: 4px;
+    --overview-stagger: 20ms;
+  }
+}
+
+@keyframes yx-overview-rise {
+  from {
+    opacity: 0;
+    transform: translateY(var(--overview-rise, 6px));
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes yx-overview-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes yx-overview-score-arc {
+  from { stroke-dashoffset: var(--overview-ring-length); }
+  to { stroke-dashoffset: var(--overview-ring-offset); }
+}
+
+@keyframes yx-overview-fill {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+
+@keyframes yx-overview-skeleton-breathe {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+.yx-overview-score-arc {
+  stroke-dasharray: var(--overview-ring-length);
+  stroke-dashoffset: var(--overview-ring-offset);
+}
+
+.yx-overview-score-knob {
+  opacity: 1;
+}
+
+.yx-overview-completeness-fill {
+  transform: scaleX(1);
+  transform-origin: left center;
+}
+
+.yx-overview-skeleton,
+.yx-overview-skeleton-on-brand {
+  border-radius: var(--radius);
+  vertical-align: middle;
+  animation: yx-overview-skeleton-breathe 1.6s ease-in-out infinite;
+}
+
+.yx-overview-skeleton {
+  background-color: var(--yx-hover);
+}
+
+.yx-overview-skeleton-on-brand {
+  background-color: rgba(255, 255, 255, 0.15);
+}
+
+.yx-overview[data-enter="true"] .yx-overview-intro {
+  animation: yx-overview-rise 300ms var(--overview-ease) both;
+}
+
+.yx-overview[data-enter="true"] .yx-overview-summary {
+  animation: yx-overview-rise 260ms var(--overview-ease) both;
+  animation-delay: var(--overview-stagger);
+}
+
+.yx-overview[data-enter="true"] .yx-overview-actions {
+  animation: yx-overview-rise 260ms var(--overview-ease) both;
+  animation-delay: calc(var(--overview-stagger) * 2);
+}
+
+.yx-overview[data-enter="true"] .yx-overview-kpis {
+  animation: yx-overview-rise 280ms var(--overview-ease) both;
+  animation-delay: calc(var(--overview-stagger) * 2);
+}
+
+.yx-overview[data-enter="true"] .yx-overview-stat {
+  animation: yx-overview-rise 280ms var(--overview-ease) both;
+  animation-delay: calc(var(--overview-stagger) * (2 + var(--overview-index, 0)));
+}
+
+.yx-overview[data-enter="true"] .yx-overview-panel {
+  animation: yx-overview-rise 280ms var(--overview-ease) both;
+  animation-delay: calc(var(--overview-stagger) * 4);
+}
+
+.yx-overview[data-enter="true"] .yx-overview-data {
+  animation: yx-overview-fade 180ms var(--overview-ease) both;
+}
+
+.yx-overview[data-enter="true"] .yx-overview-score-arc {
+  animation: yx-overview-score-arc 450ms var(--overview-ease) both;
+}
+
+.yx-overview[data-enter="true"] .yx-overview-score-knob {
+  animation: yx-overview-fade 180ms var(--overview-ease) both;
+  animation-delay: 320ms;
+}
+
+.yx-overview[data-enter="true"] .yx-overview-completeness-fill {
+  animation: yx-overview-fill 380ms var(--overview-ease) both;
+}
+
+.yx-overview[data-enter="true"] :is(.yx-overview-actions, .yx-overview-panel):focus-within,
+.yx-overview[data-enter="true"] :is(.yx-overview-actions, .yx-overview-panel):focus-within .yx-overview-data {
+  opacity: 1 !important;
+  transform: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .yx-overview {
+    --overview-rise: 0px;
+    --overview-stagger: 0ms;
+  }
+
+  .yx-overview-intro,
+  .yx-overview-summary,
+  .yx-overview-actions,
+  .yx-overview-kpis,
+  .yx-overview-stat,
+  .yx-overview-panel,
+  .yx-overview-data,
+  .yx-overview-score-arc,
+  .yx-overview-score-knob,
+  .yx-overview-completeness-fill,
+  .yx-overview-skeleton,
+  .yx-overview-skeleton-on-brand {
+    animation: none !important;
+    animation-delay: 0s !important;
+    animation-duration: 0s !important;
+    opacity: 1;
+    transform: none;
+  }
+
+  .yx-overview-score-arc {
+    stroke-dashoffset: var(--overview-ring-offset);
+  }
+
+  .yx-overview-completeness-fill {
+    transform: scaleX(1);
+  }
+}
+
+/* =========================================================================
+   Repository enter / skeleton motion
+   Animates only under .yx-repository[data-enter="true"]. Default: visible.
+   Root holds tokens only — never transform the root (dialog siblings stay put).
+   Filters fade only so a portaled/fixed dropdown is not offset from its trigger.
+   ========================================================================= */
+
+.yx-repository {
+  --repository-rise: 6px;
+  --repository-stat-rise: 4px;
+  --repository-content-rise: 4px;
+  --repository-enter-rise: var(--repository-rise);
+  --repository-stagger: 25ms;
+  --repository-ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --repository-delay-filters: 40ms;
+  --repository-delay-stats: 60ms;
+  --repository-delay-content: 100ms;
+}
+
+@media (max-width: 639px) {
+  .yx-repository {
+    --repository-rise: 4px;
+    --repository-stat-rise: 2px;
+    --repository-stagger: 15ms;
+    --repository-delay-filters: 24ms;
+    --repository-delay-stats: 36ms;
+    --repository-delay-content: 60ms;
+  }
+}
+
+@keyframes yx-repository-rise {
+  from {
+    opacity: 0;
+    transform: translateY(var(--repository-enter-rise, 6px));
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes yx-repository-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes yx-repository-skeleton-breathe {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+.yx-repository-skeleton {
+  border-radius: var(--radius);
+  background-color: var(--yx-hover);
+  vertical-align: middle;
+  animation: yx-repository-skeleton-breathe 1.6s ease-in-out infinite;
+}
+
+.yx-repository[data-enter="true"] :is(.yx-repository-intro, .yx-repository-stat, .yx-repository-content) {
+  animation: yx-repository-rise 260ms var(--repository-ease) both;
+}
+
+.yx-repository[data-enter="true"] .yx-repository-filters {
+  animation: yx-repository-fade 260ms var(--repository-ease) both;
+  animation-delay: var(--repository-delay-filters);
+}
+
+.yx-repository[data-enter="true"] .yx-repository-stat {
+  --repository-enter-rise: var(--repository-stat-rise);
+  animation-delay: calc(var(--repository-delay-stats) + var(--repository-index, 0) * var(--repository-stagger));
+}
+
+.yx-repository[data-enter="true"] .yx-repository-content {
+  --repository-enter-rise: var(--repository-content-rise);
+  animation-duration: 300ms;
+  animation-delay: var(--repository-delay-content);
+}
+
+.yx-repository[data-enter="true"] :is(.yx-repository-intro, .yx-repository-filters, .yx-repository-content):focus-within {
+  opacity: 1 !important;
+  transform: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .yx-repository {
+    --repository-rise: 0px;
+    --repository-stat-rise: 0px;
+    --repository-content-rise: 0px;
+    --repository-enter-rise: 0px;
+    --repository-stagger: 0ms;
+    --repository-delay-filters: 0ms;
+    --repository-delay-stats: 0ms;
+    --repository-delay-content: 0ms;
+  }
+
+  .yx-repository :is(.yx-repository-intro, .yx-repository-filters, .yx-repository-stat, .yx-repository-content, .yx-repository-skeleton),
+  .yx-repository .animate-spin {
+    animation: none !important;
+    animation-duration: 0s !important;
+    animation-delay: 0s !important;
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* =========================================================================
+   Detail enter motion
+   Animates only under .yx-detail[data-enter="true"]. Default: visible.
+   Root holds tokens only — never transform / opacity / filter / perspective /
+   contain (root may itself be a fixed aria-modal reader). Descendants only.
+   Reader iframe + visualization (fullscreen-capable) fade opacity only.
+   ========================================================================= */
+
+.yx-detail {
+  --detail-rise: 4px;
+  --detail-ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --detail-delay-intro: 0ms;
+  --detail-delay-card: 40ms;
+  --detail-delay-secondary: 80ms;
+  --detail-delay-content: 100ms;
+  --detail-delay-reader: 60ms;
+  --detail-delay-fade: 80ms;
+}
+
+@media (max-width: 639px) {
+  .yx-detail {
+    --detail-rise: 2px;
+    --detail-delay-card: 20ms;
+    --detail-delay-secondary: 40ms;
+    --detail-delay-content: 50ms;
+    --detail-delay-reader: 30ms;
+    --detail-delay-fade: 40ms;
+  }
+}
+
+@keyframes yx-detail-rise {
+  from {
+    opacity: 0;
+    transform: translateY(var(--detail-rise, 4px));
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes yx-detail-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.yx-detail[data-enter="true"] .yx-detail-intro {
+  animation: yx-detail-rise 260ms var(--detail-ease) var(--detail-delay-intro) both;
+}
+
+.yx-detail[data-enter="true"] .yx-detail-card {
+  animation: yx-detail-rise 280ms var(--detail-ease) var(--detail-delay-card) both;
+}
+
+.yx-detail[data-enter="true"] .yx-detail-secondary {
+  animation: yx-detail-rise 280ms var(--detail-ease) var(--detail-delay-secondary) both;
+}
+
+.yx-detail[data-enter="true"] .yx-detail-content {
+  animation: yx-detail-rise 300ms var(--detail-ease) var(--detail-delay-content) both;
+}
+
+.yx-detail[data-enter="true"] .yx-detail-reader {
+  animation: yx-detail-fade 300ms var(--detail-ease) var(--detail-delay-reader) both;
+}
+
+.yx-detail[data-enter="true"] .yx-detail-fade {
+  animation: yx-detail-fade 280ms var(--detail-ease) var(--detail-delay-fade) both;
+}
+
+.yx-detail[data-enter="true"] .yx-detail-still-loading {
+  animation: yx-detail-fade 160ms var(--detail-ease) both;
+}
+
+.yx-detail[data-enter="true"] :is(.yx-detail-intro, .yx-detail-card, .yx-detail-secondary, .yx-detail-content):focus-within {
+  opacity: 1 !important;
+  transform: none !important;
+}
+
+.yx-detail[data-enter="true"] :is(.yx-detail-reader, .yx-detail-fade, .yx-detail-still-loading):focus-within {
+  opacity: 1 !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .yx-detail {
+    --detail-rise: 0px;
+    --detail-delay-intro: 0ms;
+    --detail-delay-card: 0ms;
+    --detail-delay-secondary: 0ms;
+    --detail-delay-content: 0ms;
+    --detail-delay-reader: 0ms;
+    --detail-delay-fade: 0ms;
+  }
+
+  .yx-detail :is(.yx-detail-intro, .yx-detail-card, .yx-detail-secondary, .yx-detail-content, .yx-detail-reader, .yx-detail-fade, .yx-detail-still-loading) {
+    animation: none !important;
+    animation-duration: 0s !important;
+    animation-delay: 0s !important;
+    opacity: 1;
+    transform: none;
+  }
+}

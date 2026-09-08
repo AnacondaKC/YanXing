@@ -10,6 +10,7 @@ import {
   Trash2,
 } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useWorkspaceEntrance } from '@/components/use-workspace-entrance'
 import { apiFetch } from '@/lib/client-request'
 import { formatReportDate, formatReportTime, scoreTextClass } from '@/lib/format'
 import type { Milestone, ProjectWithCapabilities } from '@/modules/projects/domain'
@@ -36,6 +37,7 @@ type ReportHistoryViewProps = {
 export function ReportHistoryView({ project, activeReportId, onOpenReport, onDeleteReport, onReplaceReport, refreshKey = 0 }: ReportHistoryViewProps) {
   const [entries, setEntries] = useState<ReportHistoryEntry[]>([])
   const [loading, setLoading] = useState(true)
+  const { entranceProps } = useWorkspaceEntrance(loading)
   const [error, setError] = useState('')
   const [reloadKey, setReloadKey] = useState(0)
   const [total, setTotal] = useState(0)
@@ -110,9 +112,9 @@ export function ReportHistoryView({ project, activeReportId, onOpenReport, onDel
   const historyReports = entries.map((entry) => entry.report)
 
   return (
-    <section aria-label="报告版本历史" className="min-w-0">
+    <section {...entranceProps} aria-label="报告版本历史" className="yx-detail min-w-0">
       <ProjectProgressSummary project={project} />
-      <div className="mt-4 min-w-0">
+      <div aria-busy={loading} className={`mt-4 min-w-0 ${loading ? '' : 'yx-detail-content'}`}>
         {loading ? (
           <HistorySkeleton />
         ) : error ? (
@@ -181,7 +183,7 @@ function ProjectProgressSummary({ project }: { project: ProjectWithCapabilities 
       : `第 ${currentIndex + 1} 阶段 · ${currentMilestone.title}`
 
   return (
-    <div className="rounded-lg border border-yx-line bg-yx-paper p-4 shadow-2xs sm:p-5">
+    <div className="yx-detail-intro rounded-lg border border-yx-line bg-yx-paper p-4 shadow-2xs sm:p-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex min-w-0 items-start gap-2.5">
           <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gray-50 text-yx-ink">
