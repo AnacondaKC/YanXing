@@ -1,6 +1,7 @@
 import { Value } from 'typebox/value'
 import type { TSchema } from 'typebox'
-import { AiScoreDimensions, ReportCompletenessDimensions, type GateError } from '@/modules/contracts/analysis'
+import { AiScoreDimensions, MAX_MINDMAP_CHILDREN, MAX_MINDMAP_DEPTH, MAX_MINDMAP_LABEL_LENGTH, MAX_MINDMAP_NODES, ReportCompletenessDimensions, type GateError } from '@/modules/contracts/analysis'
+import { MAX_GATE_ERRORS, toSchemaGateErrors } from '@/modules/analysis/schema-errors'
 import { isLowInformationWordCloudKeyword, normalizeWordCloudKeyword, wordCloudKeywordKey } from '@/modules/analysis/word-cloud'
 
 export interface GateResult<T> {
@@ -9,19 +10,11 @@ export interface GateResult<T> {
   errors: GateError[]
 }
 
-const maxGateErrors = 50
-
 export function validateModuleOutput<T>(input: { schema: TSchema; output: unknown; extra?: (output: unknown) => GateError[] }): GateResult<T> {
-  const errors: GateError[] = []
   if (!Value.Check(input.schema, input.output)) {
-    for (const error of Value.Errors(input.schema, input.output)) {
-      const validationError = error as { path?: string; message: string; type?: string }
-      errors.push({ code: 'SCHEMA_INVALID', path: (validationError.path || '/').slice(0, 200), message: validationError.message.slice(0, 500), expected: validationError.type?.slice(0, 200) })
-      if (errors.length >= maxGateErrors) break
-    }
-    return { accepted: false, errors }
+    return { accepted: false, errors: toSchemaGateErrors(Value.Errors(input.schema, input.output)) }
   }
-  errors.push(...(input.extra?.(input.output) ?? []).slice(0, maxGateErrors))
+  const errors = (input.extra?.(input.output) ?? []).slice(0, MAX_GATE_ERRORS)
   return errors.length ? { accepted: false, errors } : { accepted: true, value: input.output as T, errors: [] }
 }
 
@@ -37,7 +30,7 @@ export function validatePageAnalysisOutput(output: unknown): GateError[] {
   validateWordCloudWords(output['词云'], '/词云', errors)
   validateHeatmapRows(output['热力图'], detailTitles, errors)
   validateSuggestions(output['AI建议'], errors)
-  return errors.slice(0, maxGateErrors)
+  return errors.slice(0, MAX_GATE_ERRORS)
 }
 
 function validateFixedTable(value: unknown, expectedKeys: readonly string[], path: string, label: string, errors: GateError[]) {
@@ -71,20 +64,20 @@ function validatePageDetails(value: unknown, errors: GateError[]) {
 
 function validatePageMindMap(node: unknown, path: string, depth: number, state: { count: number }, errors: GateError[]) {
   state.count += 1
-  if (state.count > 200) {
-    if (state.count === 201) errors.push(gateError('MINDMAP_NODE_LIMIT_EXCEEDED', path, '思维导图最多允许 200 个节点（包含根节点）。'))
+  if (state.count > MAX_MINDMAP_NODES) {
+    if (state.count === MAX_MINDMAP_NODES + 1) errors.push(gateError('MINDMAP_NODE_LIMIT_EXCEEDED', path, `思维导图最多允许 ${MAX_MINDMAP_NODES} 个节点（包含根节点）。`))
     return
   }
   if (!isRecord(node)) { errors.push(gateError('INVALID_MINDMAP_NODE', path, '思维导图节点必须是对象。')); return }
   const unexpectedFields = Object.keys(node).filter((key) => !['名称', '子节点'].includes(key))
   unexpectedFields.forEach((key) => errors.push(gateError('UNEXPECTED_MINDMAP_FIELD', `${path}/${key}`, `思维导图节点不允许字段 ${key}。`)))
-  if (typeof node['名称'] !== 'string' || !isNonBlankText(node['名称']) || node['名称'].length > 160) errors.push(gateError('INVALID_MINDMAP_LABEL', `${path}/名称`, '思维导图节点名称必须为不超过 160 个字符的非空文本。'))
+  if (typeof node['名称'] !== 'string' || !isNonBlankText(node['名称']) || node['名称'].length > MAX_MINDMAP_LABEL_LENGTH) errors.push(gateError('INVALID_MINDMAP_LABEL', `${path}/名称`, `思维导图节点名称必须为不超过 ${MAX_MINDMAP_LABEL_LENGTH} 个字符的非空文本。`))
   const children = node['子节点']
   if (!Array.isArray(children)) { errors.push(gateError('INVALID_MINDMAP_CHILDREN', `${path}/子节点`, '思维导图节点必须包含子节点数组。')); return }
-  if (children.length > 12) errors.push(gateError('TOO_MANY_MINDMAP_CHILDREN', `${path}/子节点`, '单个思维导图节点最多包含 12 个子节点。'))
+  if (children.length > MAX_MINDMAP_CHILDREN) errors.push(gateError('TOO_MANY_MINDMAP_CHILDREN', `${path}/子节点`, `单个思维导图节点最多包含 ${MAX_MINDMAP_CHILDREN} 个子节点。`))
   if (depth === 0 && children.length === 0) errors.push(gateError('EMPTY_MINDMAP_ROOT', `${path}/子节点`, '思维导图根节点必须包含至少一个子节点。'))
-  if (depth >= 4) { if (children.length > 0) errors.push(gateError('MINDMAP_DEPTH_EXCEEDED', `${path}/子节点`, '思维导图最多允许五层层级。')); return }
-  children.slice(0, 12).forEach((child, index) => validatePageMindMap(child, `${path}/子节点/${index}`, depth + 1, state, errors))
+  if (depth >= MAX_MINDMAP_DEPTH - 1) { if (children.length > 0) errors.push(gateError('MINDMAP_DEPTH_EXCEEDED', `${path}/子节点`, `思维导图最多允许 ${MAX_MINDMAP_DEPTH} 层层级。`)); return }
+  children.slice(0, MAX_MINDMAP_CHILDREN).forEach((child, index) => validatePageMindMap(child, `${path}/子节点/${index}`, depth + 1, state, errors))
 }
 
 function validateWordCloudWords(value: unknown, path: string, errors: GateError[]) {

@@ -1,3 +1,4 @@
+import { PAGE_ANALYSIS_MIND_MAP_CONSTRAINTS } from '@/lib/ai/prompt-constraints'
 import {
   RESEARCH_METHODS,
   type AnalysisGlobalSystemPrompt,
@@ -94,7 +95,7 @@ export function getDefaultAiPromptConfig(target: AiPromptTarget): AnalysisPrompt
 
 function getDefaultInstructionPrompt(target: AnalysisTrackedModuleId) {
   if (target === 'page_analysis') {
-    return '依据报告正文、课题目标与阶段评价基准，一次性生成分析页全部数据。综合评分对象必须包含固定的六个维度键（研究价值、方法严谨、证据质量、逻辑一致、结论强度、可执行性）和主要影响因素；报告完整度对象必须包含固定的六个维度键（研究目标、方法与数据、证据覆盖、分析结构、结论覆盖、风险与建议）和主要缺口。所有分数为 0-100 整数。报告详情只输出实际章节标题和摘要，摘要不超过 50 字，并输出完整度结论；不输出报告主标题。思维导图最多五层、总节点不超过 200 个（包含根节点），每个节点最多 12 个子节点。词云输出 50-60 个不重复关键词，并按相对重要性从高到低排列，不输出权重。热力图最多输出 12 行，只选择报告详情中最重要的章节（章节名称必须与报告详情的标题完全一致），六个研究方法字段固定为 ' + RESEARCH_METHODS.map((method) => method.label).join('、') + '，分数为 0-100 整数。AI建议输出 1-3 条。只返回 Schema 允许的 JSON，不要输出 ID、总分、词云权重、维度依据或其他额外字段。主要影响因素、完整度结论和主要缺口各不超过 50 字。'
+    return '依据报告正文、课题目标与阶段评价基准，一次性生成分析页全部数据。综合评分对象必须包含固定的六个维度键（研究价值、方法严谨、证据质量、逻辑一致、结论强度、可执行性）和主要影响因素；报告完整度对象必须包含固定的六个维度键（研究目标、方法与数据、证据覆盖、分析结构、结论覆盖、风险与建议）和主要缺口。所有分数为 0-100 整数。报告详情只输出实际章节标题和摘要，摘要不超过 50 字，并输出完整度结论；不输出报告主标题。' + PAGE_ANALYSIS_MIND_MAP_CONSTRAINTS + '词云输出 50-60 个不重复关键词，并按相对重要性从高到低排列，不输出权重。热力图最多输出 12 行，只选择报告详情中最重要的章节（章节名称必须与报告详情的标题完全一致），六个研究方法字段固定为 ' + RESEARCH_METHODS.map((method) => method.label).join('、') + '，分数为 0-100 整数。AI建议输出 1-3 条。只返回 Schema 允许的 JSON，不要输出 ID、总分、词云权重、维度依据或其他额外字段。主要影响因素、完整度结论和主要缺口各不超过 50 字。'
   }
   return DEFAULT_REPORT_INSIGHT_INSTRUCTION_PROMPT
 }

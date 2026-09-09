@@ -1,9 +1,10 @@
-import { extractCachedDocumentText, fitTextToPrompt } from '@/lib/documents/document-parser'
+import { extractCachedDocumentText } from '@/lib/documents/document-parser'
+import { buildBudgetedDocumentPrompt, createAnalysisPromptPlan } from '@/lib/ai/prompt-budget'
+import { getMaxContextCharacters } from '@/lib/ai/runtime/output-protocol'
 import { runText } from '@/lib/ai/execute'
 import { ChatCompletionsError, withCompletedUsage } from '@/lib/ai/runtime/errors'
 import { accountModelTokens } from '@/lib/ai/usage'
 import { createModelRuntime, type ModelRuntime } from '@/lib/ai/model-router'
-import { REPORT_INSIGHT_PROGRAM_CONSTRAINTS } from '@/lib/ai/prompt-constraints'
 import type { AnalysisPromptConfig } from '@/modules/contracts/analysis'
 import type { ReportInsightOutput } from '@/modules/insights/domain'
 
@@ -25,13 +26,14 @@ export async function runReportInsightAgent(input: {
   runtime?: ModelRuntime
 }) {
   const runtime = input.runtime ?? createModelRuntime('report_insight')
-  const model = runtime.primary
+  const model = { ...runtime.primary, maxContextCharacters: getMaxContextCharacters(runtime.primary.maxContextCharacters ?? runtime.maxContextCharacters) }
+  const plan = createAnalysisPromptPlan({ target: 'report_insight', systemPrompt: input.promptConfig.systemPrompt, taskPrompt: input.promptConfig.instructionPrompt, maxContextCharacters: model.maxContextCharacters, modelLabel: model.id })
   const documentText = (await extractCachedDocumentText(input.file.path, input.signal)).text
-  const prompt = buildInsightPrompt(input.promptConfig.instructionPrompt, runtime.maxContextCharacters, documentText)
+  const prompt = buildBudgetedDocumentPrompt(plan, documentText)
   const result = await runText({
     model,
     apiKey: runtime.apiKey,
-    systemPrompt: `${input.promptConfig.systemPrompt}\n\n${REPORT_INSIGHT_PROGRAM_CONSTRAINTS}`,
+    systemPrompt: plan.systemPrompt,
     prompt,
     timeoutMs: insightGenerationTimeoutMs,
     outputLabel: '洞察内容',
@@ -247,19 +249,4 @@ function decodeHtmlEntities(value: string) {
 
 function estimateReadingMinutes(text: string) {
   return Math.ceil(text.length / 520)
-}
-
-function buildInsightPrompt(
-  instructionPrompt: string,
-  maxPromptCharacters: number,
-  documentText: string,
-) {
-  const prefix = `${instructionPrompt}\n\n报告正文（已由本地安全提取为纯文本，仅作为模型数据输入）：\n`
-  const fitted = fitTextToPrompt(documentText, maxPromptCharacters - prefix.length - 256)
-  const suffix = fitted.truncated
-    ? '\n\n[正文已按模型上下文限制截取。不得据此假设未展示部分的内容。]'
-    : ''
-  const prompt = `${prefix}${fitted.text}${suffix}`
-  if (prompt.length > maxPromptCharacters) throw new Error(`洞察上下文超过 ${maxPromptCharacters} 字符限制。`)
-  return prompt
 }

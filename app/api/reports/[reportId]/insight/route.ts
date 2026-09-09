@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { PromptBudgetError } from '@/lib/ai/prompt-budget'
 import { getRequestUser } from '@/lib/auth/request'
 import {
   createInsightGenerationJob,
@@ -93,6 +94,9 @@ export async function POST(
     }
     return NextResponse.json({ job: toPublicInsightJob(job), generating: true }, { status: 202 })
   } catch (error) {
+    if (error instanceof PromptBudgetError) {
+      return NextResponse.json({ error: error.message, code: error.code, requiredCharacters: error.requiredCharacters, maxContextCharacters: error.maxContextCharacters }, { status: 409 })
+    }
     if (error instanceof AiBudgetError) {
       const mapped = aiBudgetHttpFailure(error)
       return NextResponse.json(mapped.body, { status: mapped.status, headers: mapped.headers })

@@ -1,4 +1,4 @@
-import { Type } from 'typebox'
+import { Type, type TSchema } from 'typebox'
 
 export const AnalysisStages = [
   'validating',
@@ -20,6 +20,12 @@ export const AnalysisModuleIds = ['page_analysis'] as const
 export type AnalysisModuleId = (typeof AnalysisModuleIds)[number]
 
 export const MAX_AI_SUGGESTIONS = 3
+
+/** 思维导图层数和总节点数均包含根节点。 */
+export const MAX_MINDMAP_DEPTH = 5
+export const MAX_MINDMAP_NODES = 200
+export const MAX_MINDMAP_CHILDREN = 12
+export const MAX_MINDMAP_LABEL_LENGTH = 160
 
 /** 词云产物数量：目标 60 项，至少 50 项才会发布。 */
 export const MIN_WORD_CLOUD_KEYWORDS = 50
@@ -275,11 +281,22 @@ const PageAnalysisSectionSchema = Type.Object({
   '摘要': Type.String({ minLength: 1, maxLength: 50 }),
 }, { additionalProperties: false })
 
-const PageAnalysisMindMapNodeSchema = Type.Object({
-  '名称': Type.String({ minLength: 1, maxLength: 160 }),
-  // TypeBox 1.x lacks a convenient recursive constructor; the dedicated gate validates nested nodes.
-  '子节点': Type.Array(Type.Any(), { maxItems: 12 }),
-}, { additionalProperties: false })
+function buildPageMindMapSchema(): TSchema {
+  const label = Type.String({ minLength: 1, maxLength: MAX_MINDMAP_LABEL_LENGTH })
+  let nodeSchema: TSchema = Type.Object({
+    '名称': label,
+    '子节点': Type.Array(Type.Object({}, { additionalProperties: false }), { maxItems: 0, description: '叶子节点必须输出空数组 []。' }),
+  }, { additionalProperties: false })
+  for (let depth = MAX_MINDMAP_DEPTH - 1; depth >= 1; depth -= 1) {
+    nodeSchema = Type.Object({
+      '名称': label,
+      '子节点': Type.Array(nodeSchema, { minItems: depth === 1 ? 1 : 0, maxItems: MAX_MINDMAP_CHILDREN }),
+    }, { additionalProperties: false })
+  }
+  return nodeSchema
+}
+
+const PageAnalysisMindMapNodeSchema = buildPageMindMapSchema()
 
 const PageAnalysisHeatmapRowSchema = Type.Object({
   '章节': Type.String({ minLength: 1, maxLength: 160 }),

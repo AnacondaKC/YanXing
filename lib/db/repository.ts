@@ -3,6 +3,8 @@ import { Value } from 'typebox/value'
 import { dirname, resolve } from 'node:path'
 import { rm } from 'node:fs/promises'
 import { pageAnalysisModule } from '@/modules/analysis/modules'
+import { buildPageAnalysisTaskPrompt } from '@/modules/analysis/prompt'
+import { createAnalysisPromptPlan } from '@/lib/ai/prompt-budget'
 import { evaluationContextsEqual, parseReportEvaluationContext, resolveReportEvaluationContext } from '@/modules/analysis/evaluation-context'
 import { validatePageAnalysisOutput } from '@/modules/analysis/gates'
 import type { AnalysisCallCheckpoint, AnalysisFinalization, AnalysisSnapshotWrite } from '@/modules/analysis/ports'
@@ -3173,6 +3175,7 @@ function insertJob(
 ) {
   const modelRuntime = job.requestedByUserId ? getAiModelRuntimeSnapshot(job.type === 'insight' ? 'report_insight' : 'page_analysis') : undefined
   if (job.requestedByUserId && !modelRuntime) throw new Error(job.type === 'insight' ? '报告洞察尚未选择模型。' : '分析页尚未选择模型。')
+  if (modelRuntime) assertJobPromptCompatibility(modelRuntime, promptSettings, evaluationContext)
   if (job.requestedByUserId) {
     const reportRow = database.prepare('SELECT project_id FROM report_versions WHERE id = ?').get(job.reportVersionId) as { project_id?: unknown } | undefined
     if (job.type === 'insight') {
@@ -3222,6 +3225,19 @@ function insertJob(
     job.createdAt,
     job.updatedAt,
   )
+}
+
+function assertJobPromptCompatibility(runtime: AiModelRuntimeSnapshot, prompts: AnalysisPromptConfig[] | undefined, evaluationContext: ReportEvaluationContext | undefined) {
+  const prompt = prompts?.find((candidate) => candidate.target === runtime.target)
+  if (!prompt) throw new Error('任务缺少冻结的提示词配置。')
+  const taskPrompt = runtime.target === 'page_analysis'
+    ? buildPageAnalysisTaskPrompt({
+        instructionPrompt: prompt.instructionPrompt, evaluationContext,
+        // 正文尚未提取时预留计数的最大表示长度，避免入队后因计数字段变长越界。
+        reportFacts: { paragraphCount: Number.MAX_SAFE_INTEGER, characterCount: Number.MAX_SAFE_INTEGER },
+      })
+    : prompt.instructionPrompt
+  createAnalysisPromptPlan({ target: runtime.target, systemPrompt: prompt.systemPrompt, taskPrompt, maxContextCharacters: runtime.maxContextCharacters, modelLabel: runtime.modelName })
 }
 
 function insertInitialModuleStates(database: ReturnType<typeof getDatabase>, jobId: string, timestamp: string) {

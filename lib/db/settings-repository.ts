@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
 import { normalizeChatCompletionsBaseUrl } from '@/lib/ai/runtime/chat-completions'
-import { buildStructuredOutputProtocol, serializeJsonSchema } from '@/lib/ai/runtime/output-protocol'
-import { REPORT_INSIGHT_PROGRAM_CONSTRAINTS, STRUCTURED_ANALYSIS_PROGRAM_CONSTRAINTS } from '@/lib/ai/prompt-constraints'
+import { createAnalysisPromptPlan } from '@/lib/ai/prompt-budget'
+import { buildPageAnalysisTaskPrompt } from '@/modules/analysis/prompt'
 import type { AiChannel, ModelProfile, ReasoningEffort } from '@/lib/ai/model/freeze'
 import {
   DEFAULT_MAX_CONTEXT_CHARACTERS,
@@ -19,7 +19,7 @@ import {
 } from '@/lib/ai/runtime-options'
 import { getDatabase } from '@/lib/db/client'
 import { decryptSecret, encryptSecret } from '@/lib/db/settings-crypto'
-import { AnalysisArtifactSchemas, AnalysisModuleIds, type AnalysisGlobalSystemPrompt, type AnalysisPromptConfig } from '@/modules/contracts/analysis'
+import { AnalysisModuleIds, type AnalysisGlobalSystemPrompt, type AnalysisPromptConfig } from '@/modules/contracts/analysis'
 import {
   AI_PROMPT_TARGETS,
   GLOBAL_SYSTEM_PROMPT_TARGET,
@@ -425,22 +425,13 @@ function assertAiPromptModelCompatibility(database: DatabaseSync) {
       MIN_MAX_CONTEXT_CHARACTERS,
       MAX_MAX_CONTEXT_CHARACTERS,
     )
-    const runtimeSystemPrompt = target === 'report_insight'
-      ? `${systemPrompt}\n\n${REPORT_INSIGHT_PROGRAM_CONSTRAINTS}`
-      : `${systemPrompt}\n\n${STRUCTURED_ANALYSIS_PROGRAM_CONSTRAINTS}\n当前模块：${target}。`
-    const promptPrefix = `${instructionPrompt}\n\n报告正文（已由本地安全提取为纯文本，仅作为模型数据输入）：\n`
-    const protocolCharacters = target === 'report_insight'
-      ? 0
-      : buildStructuredOutputProtocol({
-          name: target,
-          description: `提交 ${target} 模块的完整 JSON。只有通过 JSON、Schema 和结构门禁的数据才会进入程序。`,
-          schema: AnalysisArtifactSchemas[target],
-        }, serializeJsonSchema(AnalysisArtifactSchemas[target])).length
-    const safetyCharacters = target === 'report_insight' ? 256 : 128
-    const requiredCharacters = runtimeSystemPrompt.length + promptPrefix.length + safetyCharacters + protocolCharacters
-    if (requiredCharacters >= maxContextCharacters) {
-      throw new Error(`模型「${assignment.model_name}」无法容纳「${AI_MODEL_SELECTION_TARGET_LABELS[target]}」的系统提示词、任务提示词和输出协议（至少需要 ${requiredCharacters + 1} 字符，上限为 ${maxContextCharacters}）。请提高最大上下文或缩短提示词。`)
-    }
+    createAnalysisPromptPlan({
+      target,
+      systemPrompt,
+      taskPrompt: target === 'page_analysis' ? buildPageAnalysisTaskPrompt({ instructionPrompt }) : instructionPrompt,
+      maxContextCharacters,
+      modelLabel: assignment.model_name,
+    })
   }
 }
 

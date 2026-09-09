@@ -1,7 +1,7 @@
 export const DEFAULT_MAX_CONTEXT_CHARACTERS = 1_000_000
 export const DEFAULT_MAX_OUTPUT_TOKENS = 16_384
 /** Chat Completions 自定义渠道的可编辑默认上限；不参与分析/洞察运行时策略。 */
-export const DEFAULT_CHAT_COMPLETIONS_MAX_OUTPUT_TOKENS = 131_072
+export const DEFAULT_CHAT_COMPLETIONS_MAX_OUTPUT_TOKENS = 65_536
 export const DEFAULT_REASONING_EFFORT = 'auto'
 
 export const MIN_MAX_CONTEXT_CHARACTERS = 8_000

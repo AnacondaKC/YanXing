@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { PromptBudgetError } from '@/lib/ai/prompt-budget'
 import { countReports, createReportJob, DuplicateReportError, getProject, getProjectForUser, listReports, removeStoredReportFile, ReportAuthorizationChangedError, projectExistsReadable, userCanManageProject } from '@/lib/db/repository'
 import { pageResult, parsePagination, paginationRangeFailure } from '@/lib/http/pagination'
 import type { ReportDeliveryType } from '@/modules/reports/domain'
@@ -141,6 +142,9 @@ export async function POST(
     }
     if (request.signal.aborted && !committed) {
       return NextResponse.json({ error: '报告上传已取消。' }, { status: 408 })
+    }
+    if (error instanceof PromptBudgetError) {
+      return NextResponse.json({ error: error.message, code: error.code, requiredCharacters: error.requiredCharacters, maxContextCharacters: error.maxContextCharacters }, { status: 409 })
     }
     if (error instanceof StorageQuotaError) {
       return NextResponse.json({ error: error.message }, { status: 507, headers: { 'Retry-After': '30' } })

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { PromptBudgetError } from '@/lib/ai/prompt-budget'
 import { runAnalysisModuleAgent } from '@/lib/ai/restricted-analysis-agent'
 import { completedCallFromError } from '@/lib/ai/runtime/errors'
 import { extractCachedDocumentText } from '@/lib/documents/document-parser'
@@ -6,11 +7,12 @@ import { retryOnSqliteBusy } from '@/lib/db/checkpoint-retry'
 import { createModelRuntime, getRetryAfterMs, isRetryableModelError } from '@/lib/ai/model-router'
 import { validateModuleOutput, validatePageAnalysisOutput } from '@/modules/analysis/gates'
 import { pageAnalysisModule } from '@/modules/analysis/modules'
+import { normalizePageMindMapPayload } from '@/modules/analysis/mind-map'
 import { buildVisualizationWordCloudItems, completeWordCloudOutput } from '@/modules/analysis/word-cloud'
 import type { AnalysisModuleContext } from '@/modules/analysis/module'
 import { AnalysisLeaseLostError, type AnalysisCallCheckpoint, type AnalysisEventPublisher, type AnalysisFinalization, type AnalysisPipelineRepository, type AnalysisSnapshotWrite } from '@/modules/analysis/ports'
 import type { AnalysisJob, AnalysisSnapshot } from '@/modules/analysis/domain'
-import { ANALYSIS_SNAPSHOT_SCHEMA_VERSION, AiScoreDimensions, AnalysisStages, MAX_AI_SUGGESTIONS, RESEARCH_METHODS, ReportCompletenessDimensions, type AiScore, type AnalysisArtifactRecord, type AnalysisModuleId, type AnalysisModuleState, type AnalysisPromptConfig, type AnalysisSnapshotPayload, type AnalysisStage, type AnalysisTrackedModuleId, type GateError, type PageAnalysisArtifact, type PageAnalysisMindMapNode, type ReportCompletenessArtifact, type ReportFacts, type VisualizationArtifact } from '@/modules/contracts/analysis'
+import { ANALYSIS_SNAPSHOT_SCHEMA_VERSION, AiScoreDimensions, AnalysisStages, MAX_AI_SUGGESTIONS, MAX_MINDMAP_CHILDREN, MAX_MINDMAP_NODES, RESEARCH_METHODS, ReportCompletenessDimensions, type AiScore, type AnalysisArtifactRecord, type AnalysisModuleId, type AnalysisModuleState, type AnalysisPromptConfig, type AnalysisSnapshotPayload, type AnalysisStage, type AnalysisTrackedModuleId, type GateError, type PageAnalysisArtifact, type PageAnalysisMindMapNode, type ReportCompletenessArtifact, type ReportFacts, type VisualizationArtifact } from '@/modules/contracts/analysis'
 
 export interface PipelineContext {
   jobId: string
@@ -117,7 +119,7 @@ export async function runAnalysisPipeline(context: PipelineContext): Promise<Ana
         try {
           throwIfCancelled(context)
           saveModuleState(context, { moduleId: 'page_analysis', status: 'gating', attempt, maxAttempts: definition.maxAttempts, gateErrors: [], updatedAt: now() })
-          safePublish(context, { jobId: context.jobId, type: 'module_gating', stage: 'page_analysis', moduleId: 'page_analysis', message: '正在校验分析页输出。' })
+          safePublish(context, { jobId: context.jobId, type: 'module_gating', stage: 'page_analysis', moduleId: 'page_analysis', message: '正在校验并修正分析页格式。' })
           const evaluated = evaluatePageAnalysisOutput(definition, generated.payload, extractedDocument?.text ?? '')
           if ('error' in evaluated) {
             const errors = toOutputFailureErrors(evaluated.error)
@@ -128,7 +130,8 @@ export async function runAnalysisPipeline(context: PipelineContext): Promise<Ana
             safePublish(context, { jobId: context.jobId, type: 'module_failed', stage: 'page_analysis', moduleId: 'page_analysis', message: '分析页结果校验失败。', errors })
             break
           }
-          const { payload: generatedPayload, gate } = evaluated
+          const { payload: generatedPayload, gate, repairedPaths } = evaluated
+          if (repairedPaths.length) reportMindMapRepairs(context, { attempt, paths: repairedPaths })
           if (gate.accepted) {
             const acceptedAt = now()
             const acceptedArtifact: AnalysisArtifactRecord = { id: `artifact-${context.jobId}-page_analysis-${attempt}`, jobId: context.jobId, reportVersionId: context.reportVersionId, moduleId: 'page_analysis', schemaVersion: definition.schemaVersion, promptVersion: artifactPromptVersion(definition, pagePrompt), attempt, status: 'accepted', payload: gate.value, gateErrors: [], provider: generated.provider, model: generated.model, createdAt: acceptedAt, acceptedAt }
@@ -226,14 +229,26 @@ function toSnapshotModelCall(details: ReturnType<typeof toAnalysisCallDetails>):
   }
 }
 
-function evaluatePageAnalysisOutput(definition: typeof pageAnalysisModule, payload: unknown, documentText: string): { payload: unknown; gate: ReturnType<typeof validateModuleOutput> } | { error: unknown } {
+function evaluatePageAnalysisOutput(definition: typeof pageAnalysisModule, payload: unknown, documentText: string): { payload: unknown; gate: ReturnType<typeof validateModuleOutput>; repairedPaths: string[] } | { error: unknown } {
   try {
-    const completedPayload = completePageWordCloudPayload(payload, documentText)
+    const normalized = normalizePageMindMapPayload(payload)
+    const completedPayload = completePageWordCloudPayload(normalized.payload, documentText)
     const gate = validateModuleOutput({ schema: definition.schema, output: completedPayload, extra: validatePageAnalysisOutput })
-    return { payload: completedPayload, gate }
+    return { payload: completedPayload, gate, repairedPaths: normalized.repairedPaths }
   } catch (error) {
     return { error }
   }
+}
+
+function reportMindMapRepairs(context: PipelineContext, repair: { attempt: number; paths: string[] }) {
+  console.info('[analysis:mindmap-normalized]', JSON.stringify({ jobId: context.jobId, attempt: repair.attempt, count: repair.paths.length, paths: repair.paths }))
+  safePublish(context, {
+    jobId: context.jobId,
+    type: 'info',
+    stage: 'page_analysis',
+    moduleId: 'page_analysis',
+    message: `已自动补齐 ${repair.paths.length} 个思维导图叶子节点的空子节点数组，继续校验分析结果。`,
+  })
 }
 
 function createFailedArtifact(
@@ -306,6 +321,7 @@ function publishPartialSnapshotEvent(context: PipelineContext) {
 }
 
 function toModelFailureErrors(error: unknown): GateError[] {
+  if (error instanceof PromptBudgetError) return [{ code: 'PROMPT_CONTEXT_EXCEEDED', path: '/配置/最大上下文', message: error.message, expected: `至少 ${error.requiredCharacters} 字符` }]
   return toFailureErrors('MODEL_EXECUTION_FAILED', error, 'Agent 必须提交合法 JSON。')
 }
 
@@ -382,8 +398,8 @@ function buildMindMap(root: PageAnalysisMindMapNode): VisualizationArtifact['min
 
 function normalizeMindMapNode(node: PageAnalysisMindMapNode, id: string, state: { count: number }): VisualizationArtifact['mindMap'] {
   state.count += 1
-  const remaining = Math.max(0, 200 - state.count)
-  const children = node['子节点'].slice(0, Math.min(12, remaining)).map((child, index) => normalizeMindMapNode(child, `${id}-${index + 1}`, state))
+  const remaining = Math.max(0, MAX_MINDMAP_NODES - state.count)
+  const children = node['子节点'].slice(0, Math.min(MAX_MINDMAP_CHILDREN, remaining)).map((child, index) => normalizeMindMapNode(child, `${id}-${index + 1}`, state))
   return { id, label: node['名称'], children }
 }
 

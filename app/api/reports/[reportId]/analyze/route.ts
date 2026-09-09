@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { PromptBudgetError } from '@/lib/ai/prompt-budget'
 import { getLatestJobForReport, getProject, getReport, ReportAuthorizationChangedError, ReportEvaluationContextChangedError, startReportAnalysis, userCanManageProject } from '@/lib/db/repository'
 import { resolveReportEvaluationContext } from '@/modules/analysis/evaluation-context'
 import { recordActivity } from '@/lib/notifications'
@@ -47,6 +48,9 @@ export async function POST(
     }
     return NextResponse.json(result, { status: 202 })
   } catch (error) {
+    if (error instanceof PromptBudgetError) {
+      return NextResponse.json({ error: error.message, code: error.code, requiredCharacters: error.requiredCharacters, maxContextCharacters: error.maxContextCharacters }, { status: 409 })
+    }
     if (error instanceof AiBudgetError) {
       const mapped = aiBudgetHttpFailure(error)
       return NextResponse.json(mapped.body, { status: mapped.status, headers: mapped.headers })

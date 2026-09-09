@@ -1067,7 +1067,7 @@ test('page_analysis accepts the complete fixed contract and rejects extra fields
     '总分': 90,
   })
   assert.equal(withExtra.accepted, false)
-  assert.equal(withExtra.errors.some((error) => error.code === 'SCHEMA_INVALID' && error.path === '/'), true)
+  assert.equal(withExtra.errors.some((error) => error.code === 'SCHEMA_INVALID' && error.path === '/总分'), true)
 
   const withWordWeight = validatePageAnalysis({
     ...createPageAnalysis(),
@@ -1181,7 +1181,8 @@ test('mind map enforces node count, depth and child-width limits', () => {
 
   const tooDeep = { '名称': 'root', '子节点': [{ '名称': 'L2', '子节点': [{ '名称': 'L3', '子节点': [{ '名称': 'L4', '子节点': [{ '名称': 'L5', '子节点': [{ '名称': 'L6', '子节点': [] }] }] }] }] }] }
   const deepResult = validatePageAnalysis(createPageAnalysis({ '思维导图': tooDeep }))
-  assert.equal(deepResult.errors.some((error) => error.code === 'MINDMAP_DEPTH_EXCEEDED'), true)
+  assert.equal(deepResult.accepted, false)
+  assert.equal(deepResult.errors.some((error) => error.code === 'SCHEMA_INVALID' || error.code === 'MINDMAP_DEPTH_EXCEEDED'), true)
 })
 
 test('AI suggestions allow at most three non-empty items', () => {

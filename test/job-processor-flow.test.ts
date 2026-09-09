@@ -10,7 +10,8 @@ process.env.YANXING_CHAT_COMPLETIONS_API_KEY = 'sk-test-processor-key'
 process.env.YANXING_CHAT_COMPLETIONS_MODEL = 'processor-model'
 process.env.YANXING_CHAT_COMPLETIONS_BASE_URL = 'http://127.0.0.1:9/v1'
 
-const { createOrUpdateUser } = await import('../lib/auth/session')
+const { createOrUpdateUser, createSession, sessionCookieName } = await import('../lib/auth/session')
+const { POST: postAnalysis } = await import('../app/api/reports/[reportId]/analyze/route')
 const {
   cancelJob,
   claimNextJob,
@@ -20,13 +21,15 @@ const {
   getCurrentSnapshot,
   getJob,
   getReportInsight,
+  startReportAnalysis,
   updateProject,
 } = await import('../lib/db/repository')
 const { getDatabase } = await import('../lib/db/client')
 const { encryptSecret } = await import('../lib/db/settings-crypto')
 const { processJob } = await import('../worker/job-processor')
 import type { AuthUser } from '../lib/auth/session'
-import type { PageAnalysisArtifact } from '../modules/contracts/analysis'
+import type { AnalysisPromptConfig, PageAnalysisArtifact } from '../modules/contracts/analysis'
+import { PromptBudgetError } from '../lib/ai/prompt-budget'
 
 const now = () => new Date().toISOString()
 
@@ -218,6 +221,66 @@ test('processJob publishes a complete analysis and recovers from a lost snapshot
   assert.equal(budgetLedger(job.id).model_calls_completed, 1)
 })
 
+test('processJob repairs omitted mind-map leaves and publishes once without retry or content regeneration', async (context) => {
+  ensureProcessorApiKey()
+  const owner = createOwner()
+  const project = createStagedProject(owner)
+  const source = await createStoredReportSource('processor-mindmap-normalization')
+  const { report, job } = createReportJob({
+    projectId: project.id, fileName: 'mindmap-normalization.docx', source,
+    reportId: undefined, milestoneId: 'stage-1', autoAnalyze: true, actor: owner,
+  })
+  assert.ok(job)
+  const worker = 'processor-mindmap-worker'
+  assert.equal(claimNextJob(worker, 60_000)?.id, job.id)
+
+  const expected = createPageAnalysisFixture()
+  expected['思维导图']['子节点'] = [
+    ...[3, 6, 3, 3].map((count, branch) => ({
+      '名称': `分支${branch}`,
+      '子节点': Array.from({ length: count }, (_, leaf) => ({ '名称': `结论${branch}-${leaf}`, '子节点': [] })),
+    })),
+    { '名称': '独立结论', '子节点': [] },
+  ]
+  const response = JSON.stringify(expected, (key, value) => key === '子节点' && Array.isArray(value) && value.length === 0 ? undefined : value)
+  const audit = context.mock.method(console, 'info', () => undefined)
+  let providerCalls = 0
+  await withMockedFetch(async () => {
+    providerCalls += 1
+    return chatCompletionResponse(response, 15)
+  }, async () => {
+    await processJob(job.id, { leaseOwner: worker })
+  })
+
+  assert.equal(providerCalls, 1)
+  assert.equal(getJob(job.id)?.status, 'completed')
+  assert.equal(getJob(job.id)?.aiCallsCompleted, 1)
+  assert.equal(budgetLedger(job.id).model_calls_completed, 1)
+  assert.equal(budgetLedger(job.id).accounted_tokens, 15)
+  const artifacts = getDatabase().prepare('SELECT status, attempt, payload_json FROM analysis_artifacts WHERE job_id = ?').all(job.id) as { status: string; attempt: number; payload_json: string }[]
+  assert.equal(artifacts.length, 1)
+  assert.equal(artifacts[0].status, 'accepted')
+  assert.equal(artifacts[0].attempt, 1)
+  const saved = JSON.parse(artifacts[0].payload_json) as PageAnalysisArtifact
+  for (const key of ['思维导图', '综合评分', '报告完整度', '报告详情', '热力图', 'AI建议'] as const) {
+    assert.deepEqual(saved[key], expected[key])
+  }
+  const snapshot = getCurrentSnapshot(report.id)
+  assert.ok(snapshot)
+  assert.equal(snapshot.payload.visualization.mindMap.children.length, 5)
+  assert.equal(snapshot.payload.visualization.mindMap.children[1].children.length, 6)
+  const events = getDatabase().prepare('SELECT type, message FROM job_events WHERE job_id = ?').all(job.id) as { type: string; message: string }[]
+  assert.equal(events.some((event) => ['module_retrying', 'module_failed', 'failed'].includes(event.type)), false)
+  assert.ok(events.some((event) => event.type === 'info' && event.message.includes('已自动补齐 16 个')))
+  const repairLog = audit.mock.calls.find((call) => call.arguments[0] === '[analysis:mindmap-normalized]')
+  assert.ok(repairLog)
+  const expectedPaths = [
+    ...[3, 6, 3, 3].flatMap((count, branch) => Array.from({ length: count }, (_, leaf) => `/思维导图/子节点/${branch}/子节点/${leaf}/子节点`)),
+    '/思维导图/子节点/4/子节点',
+  ]
+  assert.deepEqual(JSON.parse(String(repairLog.arguments[1])), { jobId: job.id, attempt: 1, count: 16, paths: expectedPaths })
+})
+
 test('processJob retries a gate failure then publishes the accepted analysis', async () => {
   ensureProcessorApiKey()
   const owner = createOwner()
@@ -254,6 +317,134 @@ test('processJob retries a gate failure then publishes the accepted analysis', a
   assert.equal(ledger.state, 'settled')
   assert.equal(ledger.model_calls_started, 2)
   assert.equal(ledger.model_calls_completed, 2)
+})
+
+test('processJob still rejects malformed mind-map children after bounded retries', async () => {
+  ensureProcessorApiKey()
+  const owner = createOwner()
+  const project = createStagedProject(owner)
+  const source = await createStoredReportSource('processor-mindmap-invalid')
+  const { report, job } = createReportJob({
+    projectId: project.id, fileName: 'mindmap-invalid.docx', source,
+    reportId: undefined, milestoneId: 'stage-1', autoAnalyze: true, actor: owner,
+  })
+  assert.ok(job)
+  const worker = 'processor-mindmap-invalid-worker'
+  assert.equal(claimNextJob(worker, 60_000)?.id, job.id)
+  const malformed = {
+    ...createPageAnalysisFixture(),
+    '思维导图': { '名称': '根', '子节点': [{ '名称': '错误类型', '子节点': null }] },
+  }
+  let providerCalls = 0
+  await withMockedFetch(async () => {
+    providerCalls += 1
+    return chatCompletionResponse(JSON.stringify(malformed), 15)
+  }, async () => {
+    await processJob(job.id, { leaseOwner: worker })
+  })
+  assert.equal(providerCalls, 3)
+  assert.equal(getJob(job.id)?.status, 'failed')
+  assert.equal(getCurrentSnapshot(report.id), undefined)
+  assert.equal(budgetLedger(job.id).model_calls_completed, 3)
+  assert.equal(budgetLedger(job.id).accounted_tokens, 45)
+  const artifacts = getDatabase().prepare('SELECT status, payload_json FROM analysis_artifacts WHERE job_id = ?').all(job.id) as { status: string; payload_json: string }[]
+  assert.equal(artifacts.length, 3)
+  for (const artifact of artifacts) {
+    assert.equal(artifact.status, 'failed')
+    assert.deepEqual(JSON.parse(artifact.payload_json)['思维导图'], malformed['思维导图'])
+  }
+})
+
+test('schema retry feeds the exact nested field path back to the model', async () => {
+  ensureProcessorApiKey()
+  const owner = createOwner()
+  const project = createStagedProject(owner)
+  const source = await createStoredReportSource('processor-schema-path')
+  const { job } = createReportJob({ projectId: project.id, fileName: 'schema-path.docx', source, reportId: undefined, milestoneId: 'stage-1', autoAnalyze: true, actor: owner })
+  assert.ok(job)
+  const worker = 'processor-schema-path-worker'
+  assert.equal(claimNextJob(worker, 60_000)?.id, job.id)
+  const valid = createPageAnalysisFixture()
+  const invalid = { ...valid, '思维导图': { '名称': '根', '子节点': [{ '名称': '分支', '子节点': null }] } }
+  let calls = 0
+  await withMockedFetch(async (_url, init) => {
+    if (calls === 1) {
+      const body = JSON.parse(String(init?.body)) as { messages: { role: string; content: string }[] }
+      const prompt = body.messages.find((message) => message.role === 'user')?.content
+      assert.ok(prompt?.includes('修正以下门禁错误：'))
+      assert.ok(prompt?.includes('\"path\":\"/思维导图/子节点/0/子节点\"'))
+      assert.equal(prompt?.includes('\"path\":\"/\"'), false)
+    }
+    calls += 1
+    return chatCompletionResponse(JSON.stringify(calls === 1 ? invalid : valid), 15)
+  }, async () => { await processJob(job.id, { leaseOwner: worker }) })
+  assert.equal(calls, 2)
+  assert.equal(getJob(job.id)?.status, 'completed')
+})
+
+test('old frozen context fails once without provider usage or rewriting the frozen configuration', async () => {
+  ensureProcessorApiKey()
+  const owner = createOwner()
+  const project = createStagedProject(owner)
+  const source = await createStoredReportSource('processor-old-context')
+  const { report, job } = createReportJob({ projectId: project.id, fileName: 'old-context.docx', source, reportId: undefined, milestoneId: 'stage-1', autoAnalyze: true, actor: owner })
+  assert.ok(job)
+  const db = getDatabase()
+  const stored = db.prepare('SELECT model_runtime_json, prompt_config_json FROM analysis_jobs WHERE id = ?').get(job.id) as { model_runtime_json: string; prompt_config_json: string }
+  const runtime = { ...JSON.parse(stored.model_runtime_json), maxContextCharacters: 8_000, maxOutputTokens: 131_072 }
+  const prompts = (JSON.parse(stored.prompt_config_json) as AnalysisPromptConfig[]).map((prompt) => ({ ...prompt, systemPrompt: '研'.repeat(4_500) }))
+  const frozenRuntime = JSON.stringify(runtime)
+  const frozenPrompts = JSON.stringify(prompts)
+  db.prepare('UPDATE analysis_jobs SET model_runtime_json = ?, prompt_config_json = ? WHERE id = ?').run(frozenRuntime, frozenPrompts, job.id)
+  const worker = 'processor-old-context-worker'
+  assert.equal(claimNextJob(worker, 60_000)?.id, job.id)
+  let calls = 0
+  await withMockedFetch(async () => { calls += 1; return chatCompletionResponse('{}', 15) }, async () => { await processJob(job.id, { leaseOwner: worker }) })
+  assert.equal(calls, 0)
+  assert.equal(getJob(job.id)?.status, 'failed')
+  assert.match(getJob(job.id)?.errorMessage ?? '', /至少需要.*上限为 8000/)
+  assert.equal(getCurrentSnapshot(report.id), undefined)
+  const ledger = budgetLedger(job.id)
+  assert.equal(ledger.model_calls_started, 0)
+  assert.equal(ledger.model_calls_completed, 0)
+  assert.equal(ledger.accounted_tokens, 0)
+  const artifacts = db.prepare('SELECT gate_errors_json FROM analysis_artifacts WHERE job_id = ?').all(job.id) as { gate_errors_json: string }[]
+  assert.equal(artifacts.length, 1)
+  assert.equal(JSON.parse(artifacts[0].gate_errors_json)[0].code, 'PROMPT_CONTEXT_EXCEEDED')
+  const after = db.prepare('SELECT model_runtime_json, prompt_config_json FROM analysis_jobs WHERE id = ?').get(job.id) as typeof stored
+  assert.equal(after.model_runtime_json === frozenRuntime, true)
+  assert.equal(after.prompt_config_json === frozenPrompts, true)
+})
+
+test('admission rejects an incompatible saved configuration before queue or budget mutations', async () => {
+  ensureProcessorApiKey()
+  const owner = createOwner()
+  const project = createStagedProject(owner)
+  const source = await createStoredReportSource('processor-admission-context')
+  const { report } = createReportJob({ projectId: project.id, fileName: 'admission-context.docx', source, reportId: undefined, milestoneId: 'stage-1', autoAnalyze: false, actor: owner })
+  const db = getDatabase()
+  const oldPrompts = db.prepare('SELECT target, system_prompt FROM ai_prompt_settings').all() as { target: string; system_prompt: string }[]
+  const oldModels = db.prepare('SELECT id, max_context_characters FROM ai_model_profiles').all() as { id: string; max_context_characters: number }[]
+  const beforeJobs = db.prepare('SELECT COUNT(*) AS count FROM analysis_jobs').get()
+  const beforeBudget = db.prepare('SELECT COUNT(*) AS count FROM ai_budget_ledger').get()
+  try {
+    db.prepare('UPDATE ai_prompt_settings SET system_prompt = ?').run('研'.repeat(4_500))
+    db.prepare('UPDATE ai_model_profiles SET max_context_characters = 8000').run()
+    assert.throws(() => startReportAnalysis(report.id, owner), PromptBudgetError)
+    const session = createSession(owner.id)
+    const response = await postAnalysis(new Request(`http://localhost/api/reports/${report.id}/analyze`, { method: 'POST', headers: { cookie: `${sessionCookieName}=${session.token}` } }), { params: Promise.resolve({ reportId: report.id }) })
+    assert.equal(response.status, 409)
+    const body = await response.json() as { code: string; requiredCharacters: number; maxContextCharacters: number; error: string }
+    assert.equal(body.code, 'prompt_context_exceeded')
+    assert.equal(body.maxContextCharacters, 8_000)
+    assert.ok(body.requiredCharacters > body.maxContextCharacters)
+    assert.match(body.error, /提高最大上下文或缩短提示词/)
+    assert.deepEqual(db.prepare('SELECT COUNT(*) AS count FROM analysis_jobs').get(), beforeJobs)
+    assert.deepEqual(db.prepare('SELECT COUNT(*) AS count FROM ai_budget_ledger').get(), beforeBudget)
+  } finally {
+    for (const row of oldPrompts) db.prepare('UPDATE ai_prompt_settings SET system_prompt = ? WHERE target = ?').run(row.system_prompt, row.target)
+    for (const row of oldModels) db.prepare('UPDATE ai_model_profiles SET max_context_characters = ? WHERE id = ?').run(row.max_context_characters, row.id)
+  }
 })
 
 test('processJob settles analysis usage after cancel without publishing a snapshot', async () => {
