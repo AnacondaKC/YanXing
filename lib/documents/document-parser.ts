@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process'
 import { readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { runtimeConfig } from '@/lib/config/environment'
 import { errorCode } from '@/lib/storage/stream-utils'
-import { resolveParserChildRuntime } from './parser-child-runtime'
+import { parserChildSpawnArguments, resolveParserChildRuntime } from './parser-child-runtime'
 import { maxUploadBytes } from './report-storage'
 
 const maxExtractedCharacters = runtimeConfig.report.maxExtractedCharacters
@@ -300,16 +300,14 @@ const parserCloseFallbackMs = 100
 
 function runIsolatedParser(
   filePath: string,
-  options: { workerPath: string; tsxLoaderPath: string; label: 'DOCX' | 'PDF'; memoryMb: number; timeoutMs: number; maxResultBytes: number; signal?: AbortSignal },
+  options: { workerPath: string; tsxLoaderPath?: string; label: 'DOCX' | 'PDF'; memoryMb: number; timeoutMs: number; maxResultBytes: number; signal?: AbortSignal },
 ): Promise<ExtractedDocumentText> {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [
-      `--max-old-space-size=${options.memoryMb}`,
-      '--import',
-      options.tsxLoaderPath,
-      options.workerPath,
+    const child = spawn(process.execPath, parserChildSpawnArguments(
+      { workerPath: options.workerPath, tsxLoaderPath: options.tsxLoaderPath },
+      options.memoryMb,
       filePath,
-    ], {
+    ), {
       cwd: process.cwd(),
       env: process.env,
       stdio: ['ignore', 'pipe', 'pipe'],

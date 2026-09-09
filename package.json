@@ -13,6 +13,8 @@
     "dev": "node scripts/app-manager.mjs start --mode development",
     "dev:worker": "NODE_ENV=development tsx worker/index.ts",
     "build": "next build --webpack",
+    "build:runtime": "node scripts/build-runtime.mjs",
+    "build:docker": "pnpm build:runtime && YANXING_STANDALONE=1 YANXING_NEXT_DIST_DIR=.next pnpm build && node scripts/docker-runtime-config.mjs --write-build-config && node scripts/assemble-docker-runtime.mjs",
     "start": "node scripts/app-manager.mjs start --mode production",
     "stop": "node scripts/app-manager.mjs stop",
     "restart": "node scripts/app-manager.mjs restart",
@@ -27,11 +29,11 @@
     "check": "pnpm lint && pnpm test && pnpm build"
   },
   "dependencies": {
+    "@next/env": "16.3.2",
     "@visx/heatmap": "^4.0.0",
     "@visx/hierarchy": "^4.0.0",
     "@visx/wordcloud": "^4.0.0",
     "docx-preview": "^0.4.0",
-    "@next/env": "16.3.2",
     "lucide-react": "^0.468.0",
     "mammoth": "^1.12.0",
     "next": "16.3.2",
@@ -47,6 +49,7 @@
     "@types/node": "^24.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "esbuild": "0.28.1",
     "postcss": "^8.5.0",
     "tailwindcss": "^4.1.9",
     "typescript": "^5.7.0"

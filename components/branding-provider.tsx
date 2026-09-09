@@ -1,6 +1,6 @@
 'use client'
 
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { createContext, useContext, useMemo, useState, type ReactNode } from 'react'
 import {
   DEFAULT_BRAND_SETTINGS,
   normalizeBrandDisplayText,
@@ -17,21 +17,11 @@ const BrandingContext = createContext<BrandingContextValue>({
   applySettings() {},
 })
 
-export function BrandingProvider({ children }: { children: ReactNode }) {
-  const [settings, setSettings] = useState(DEFAULT_BRAND_SETTINGS)
-
-  useEffect(() => {
-    const controller = new AbortController()
-    void fetch('/api/branding', { cache: 'no-store', signal: controller.signal })
-      .then(async (response) => response.ok ? response.json() as Promise<unknown> : null)
-      .then((body) => {
-        if (controller.signal.aborted) return
-        const parsed = parseBrandSettingsResponse(body)
-        if (parsed) setSettings(parsed)
-      })
-      .catch(() => undefined)
-    return () => controller.abort()
-  }, [])
+export function BrandingProvider({ children, initialSettings }: {
+  children: ReactNode
+  initialSettings: PublicBrandSettings
+}) {
+  const [settings, setSettings] = useState(initialSettings)
 
   const value = useMemo(() => ({ settings, applySettings: setSettings }), [settings])
   return <BrandingContext.Provider value={value}>{children}</BrandingContext.Provider>

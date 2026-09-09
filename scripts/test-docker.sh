@@ -8,7 +8,7 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 workspace=$(mktemp -d)
 project="yanxing-smoke-$(date +%s)-$$"
 export YANXING_ENV_FILE="$workspace/environment"
-export YANXING_IMAGE="$project:local"
+export YANXING_IMAGE="${YANXING_TEST_IMAGE:-$project:local}"
 export YANXING_HTTP_PORT=0
 export REPORT_MAX_UPLOAD_BYTES=26214400
 password=$(node -e 'process.stdout.write(require("node:crypto").randomBytes(24).toString("hex"))')
@@ -23,7 +23,9 @@ cleanup() {
   trap - EXIT
   if [ "$status" -ne 0 ]; then compose logs --no-color >&2 || true; fi
   compose down --volumes --remove-orphans >/dev/null 2>&1 || true
-  docker image rm "$YANXING_IMAGE" >/dev/null 2>&1 || true
+  if [ -z "${YANXING_TEST_IMAGE:-}" ]; then
+    docker image rm "$YANXING_IMAGE" >/dev/null 2>&1 || true
+  fi
   rm -rf "$workspace"
   exit "$status"
 }
@@ -32,9 +34,16 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 compose config --quiet
-compose build web
+if [ -z "${YANXING_TEST_IMAGE:-}" ]; then
+  compose build web
+else
+  docker image inspect "$YANXING_IMAGE" >/dev/null
+fi
 compose up -d --wait --wait-timeout 180
-compose exec -T web node --input-type=module -e 'import { existsSync, statSync } from "node:fs"; if (process.getuid() === 0 || existsSync(".env") || existsSync("node_modules/typescript")) process.exit(1); if ((statSync("storage/yanxing.sqlite").mode & 0o077) !== 0) process.exit(1)'
+compose exec -T web node --input-type=module -e 'import { existsSync, statSync } from "node:fs"; if (process.getuid() === 0 || [".env", ".next/cache/webpack", "node_modules/typescript", "node_modules/tsx", "node_modules/esbuild", "lib/documents/pdf-parser-worker.ts"].some(existsSync)) process.exit(1); if (!["server.js", ".runtime/worker/index.mjs", ".runtime/lib/documents/pdf-parser-worker.mjs", ".runtime/lib/documents/docx-parser-worker.mjs"].every(existsSync)) process.exit(1); if ((statSync("storage/yanxing.sqlite").mode & 0o077) !== 0) process.exit(1)'
+compose exec -T -e YANXING_SMOKE_ALLOW_MUTATIONS=true web node scripts/docker-security-smoke.mjs
+compose run --rm -T --no-deps migrate storage:relocate --help
+compose run --rm -T --no-deps migrate storage:reconcile --dry-run
 compose run --rm -T --no-deps -e "YANXING_ADMIN_PASSWORD=$password" migrate user:create
 compose exec -T \
   -e YANXING_SMOKE_ALLOW_MUTATIONS=true \

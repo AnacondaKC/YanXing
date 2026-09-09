@@ -1,12 +1,15 @@
 import { spawn } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
 import { createServer } from 'node:http'
-import { createRequire } from 'node:module'
 import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import {
+  parserChildSpawnArguments,
+  resolveParserChildRuntime,
+} from '../lib/documents/parser-child-runtime.mjs'
 import {
   createMinimalDocxBuffer,
   createMinimalPdfBuffer,
@@ -375,21 +378,15 @@ async function assertParserChildren(documents) {
 }
 
 async function runParserChild({ kind, filePath, expectedText }) {
-  const workerFileName = kind === 'PDF' ? 'pdf-parser-worker.ts' : 'docx-parser-worker.ts'
-  const workerPath = path.join(process.cwd(), 'lib', 'documents', workerFileName)
-  if (!existsSync(workerPath)) {
-    throw new SmokeError(`无法定位 ${kind} 解析子进程脚本 ${workerPath}`)
-  }
-  let tsxLoaderPath
+  let runtime
   try {
-    tsxLoaderPath = createRequire(path.join(process.cwd(), 'package.json')).resolve('tsx/esm')
+    runtime = resolveParserChildRuntime({ kind })
   } catch (error) {
-    throw new SmokeError(`无法解析 tsx/esm 加载器：${error instanceof Error ? error.message : String(error)}`)
+    throw new SmokeError(error instanceof Error ? error.message : String(error))
   }
   const result = await spawnParserJson({
     kind,
-    workerPath,
-    tsxLoaderPath,
+    runtime,
     filePath,
   })
   if (!result?.ok || typeof result.text !== 'string' || !result.text.includes(expectedText)) {
@@ -409,15 +406,9 @@ function parserMemoryMb(kind) {
   return parsed
 }
 
-function spawnParserJson({ kind, workerPath, tsxLoaderPath, filePath }) {
+function spawnParserJson({ kind, runtime, filePath }) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [
-      `--max-old-space-size=${parserMemoryMb(kind)}`,
-      '--import',
-      tsxLoaderPath,
-      workerPath,
-      filePath,
-    ], {
+    const child = spawn(process.execPath, parserChildSpawnArguments(runtime, parserMemoryMb(kind), filePath), {
       cwd: process.cwd(),
       env: process.env,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -426,7 +417,7 @@ function spawnParserJson({ kind, workerPath, tsxLoaderPath, filePath }) {
     let stderr = ''
     const timeout = setTimeout(() => {
       child.kill('SIGKILL')
-      reject(new SmokeError(`解析子进程超时：${path.basename(workerPath)}`))
+      reject(new SmokeError(`解析子进程超时：${path.basename(runtime.workerPath)}`))
     }, PARSER_CHILD_TIMEOUT_MS)
     child.stdout.on('data', (chunk) => output.push(chunk))
     child.stderr.on('data', (chunk) => {

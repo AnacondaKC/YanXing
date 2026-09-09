@@ -1,10 +1,15 @@
 import assert from 'node:assert/strict'
 import { validateHeaderValue } from 'node:http'
+import { DatabaseSync } from 'node:sqlite'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { BrandingProvider, useBranding } from '../components/branding-provider'
 import {
+  DEFAULT_BRAND_SETTINGS,
   DEFAULT_HEADER_LOGO_URL,
   DEFAULT_LOGIN_WATERMARK_URL,
   normalizeBrandDisplayText,
@@ -16,7 +21,7 @@ process.env.YANXING_DATABASE_PATH = path.join(directory, 'branding.sqlite')
 
 const { getDatabase } = await import('../lib/db/client')
 const { createSession, sessionCookieName } = await import('../lib/auth/session')
-const { getPublicBrandSettings, getStoredBrandAsset } = await import('../lib/db/brand-settings-repository')
+const { getPublicBrandSettings, getPublicBrandSettingsOrDefault, getStoredBrandAsset } = await import('../lib/db/brand-settings-repository')
 const publicRoute = await import('../app/api/branding/route')
 const assetRoute = await import('../app/api/branding/assets/[kind]/route')
 const adminRoute = await import('../app/api/admin/branding/route')
@@ -45,6 +50,28 @@ function adminRequest(input: { body?: unknown; token?: string; headers?: Record<
 async function readSettings(response: Response) {
   const body = await response.json() as { settings: PublicBrandSettings }
   return body.settings
+}
+
+function BrandSettingsConsumer() {
+  const { settings } = useBranding()
+  return createElement('header', null,
+    createElement('img', { src: settings.headerLogoUrl, alt: settings.displayText.replace(/\n/g, ' ') }),
+    createElement('img', { src: settings.loginWatermarkUrl, alt: '' }),
+    createElement('span', null, settings.displayText),
+  )
+}
+
+function assertInitialBrandMarkup(settings: PublicBrandSettings) {
+  const html = renderToStaticMarkup(createElement(BrandingProvider, {
+    initialSettings: settings,
+    children: createElement(BrandSettingsConsumer),
+  }))
+  assert.ok(html.includes('src="' + settings.headerLogoUrl + '"'))
+  assert.ok(html.includes('src="' + settings.loginWatermarkUrl + '"'))
+  assert.ok(html.includes(settings.displayText))
+  if (settings.headerLogoUrl !== DEFAULT_HEADER_LOGO_URL && settings.loginWatermarkUrl !== DEFAULT_LOGIN_WATERMARK_URL) {
+    assert.ok(!html.includes(DEFAULT_HEADER_LOGO_URL), 'custom branding must not render or preload the default logo')
+  }
 }
 
 test('default brand image URLs are safe for HTTP preload headers', () => {
@@ -78,6 +105,44 @@ test('public branding starts with generic defaults and does not require authenti
   assert.equal((await readSettings(response)).displayText, '研行致远\n产业政策研究团队')
 })
 
+test('initial HTML uses defaults when no custom brand is saved', () => {
+  assertInitialBrandMarkup(getPublicBrandSettingsOrDefault())
+})
+
+for (const [name, sql] of [
+  ['missing record', 'DELETE FROM brand_settings'],
+  ['invalid record', "UPDATE brand_settings SET display_text = '一\n二\n三'"],
+]) {
+  test(`page branding falls back for ${name} without weakening API validation`, (context) => {
+    const log = context.mock.method(console, 'error', () => undefined)
+    database.exec('SAVEPOINT branding_failure')
+    try {
+      database.exec(sql)
+      const settings = getPublicBrandSettingsOrDefault()
+      assert.deepEqual(settings, DEFAULT_BRAND_SETTINGS)
+      assert.notEqual(settings, DEFAULT_BRAND_SETTINGS)
+      assertInitialBrandMarkup(settings)
+      assert.equal(log.mock.callCount(), 1)
+      assert.throws(() => getPublicBrandSettings(), /品牌设置存储无效/)
+      assert.equal(publicRoute.GET(new Request('http://localhost/api/branding')).status, 500)
+      assert.equal(adminRoute.GET(adminRequest({ token: adminToken })).status, 500)
+    } finally {
+      database.exec('ROLLBACK TO branding_failure; RELEASE branding_failure')
+    }
+  })
+}
+
+test('page branding falls back when the database cannot be queried', (context) => {
+  const log = context.mock.method(console, 'error', () => undefined)
+  const closedDatabase = new DatabaseSync(':memory:')
+  closedDatabase.close()
+  const settings = getPublicBrandSettingsOrDefault(closedDatabase)
+  assert.deepEqual(settings, DEFAULT_BRAND_SETTINGS)
+  assertInitialBrandMarkup(settings)
+  assert.equal(log.mock.callCount(), 1)
+  assert.throws(() => getPublicBrandSettings(closedDatabase))
+})
+
 test('admin branding API requires administrators and validates revisions and images', async () => {
   assert.equal(adminRoute.GET(adminRequest()).status, 401)
   assert.equal(adminRoute.GET(adminRequest({ token: researcherToken })).status, 403)
@@ -100,6 +165,7 @@ test('saving updates all brand surfaces, serves assets, handles conflicts, and r
   assert.equal(first.status, 200)
   const saved = await readSettings(first)
   assert.equal(saved.revision, 2)
+  assertInitialBrandMarkup(getPublicBrandSettingsOrDefault())
   assert.equal(saved.displayText, '研行产业政策\n研究团队')
   assert.match(saved.headerLogoUrl, /^\/api\/branding\/assets\/header-logo\?v=2$/)
   assert.match(saved.loginWatermarkUrl, /^\/api\/branding\/assets\/login-watermark\?v=2$/)
@@ -127,6 +193,7 @@ test('saving updates all brand surfaces, serves assets, handles conflicts, and r
   assert.equal(reset.status, 200)
   const defaults = await readSettings(reset)
   assert.equal(defaults.revision, 3)
+  assertInitialBrandMarkup(getPublicBrandSettingsOrDefault())
   assert.equal(defaults.headerLogoUrl, DEFAULT_HEADER_LOGO_URL)
   assert.equal(defaults.loginWatermarkUrl, DEFAULT_LOGIN_WATERMARK_URL)
   assert.equal(getStoredBrandAsset('header-logo'), null)

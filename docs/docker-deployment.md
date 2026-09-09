@@ -4,6 +4,17 @@
 
 部署可以使用 GitHub Release 发布后推送到 GHCR 的预构建镜像，也可以继续用仓库内 Dockerfile / Compose 在本机构建。容器基准环境为 Node.js 24.20.0、pnpm 11.18.0，与 `.nvmrc` 和 CI 一致。对外再分发构建镜像前，应另行核验最终产物中的第三方组件，见 [第三方许可证说明](third-party-licenses.md)。
 
+## 镜像运行产物
+
+Docker 构建使用 Next standalone，并在构建阶段将 Worker、数据库迁移、用户/存储管理命令及 PDF/DOCX 解析子进程预编译为 `.runtime/` 下的 JavaScript。最终镜像只合并 Web 与这些入口实际追踪到的运行依赖，另行保留静态资源和第三方许可文件，不复制完整 `node_modules` 或 `.next/cache`。构建工具仍保留在构建阶段。
+
+- 基础环境继续使用 Debian bookworm slim / Node 24，保留 shell，不切换 Alpine，也不削减 PDF/DOCX 功能。
+- 程序、依赖及管理脚本由 root 拥有，运行用户只读；仅 `/app/storage`、`/app/.next/cache` 和临时目录允许应用写入。不要将整个程序目录改为运行用户所有。
+- Docker 内 `YANXING_COMPILED_RUNTIME=1` 选择预编译解析子进程；不要覆盖此内部运行标记。现有源码部署 `pnpm dev/start` 仍使用原来的 TypeScript 启动方式。
+- `web` 启动 `/app/server.js`；其他服务通过现有入口命令启动 `/app/.runtime/` 中的产物。`migrate`、`user:create`、`storage:reconcile`、`storage:relocate` 的 Compose 用法不变。不要在镜像内直接执行旧的 `.ts` 路径或依赖 `tsx`。
+- 第三方许可文件保留于 `/app/third-party-licenses/`（包含构建依赖的许可副本，并非运行依赖清单）；镜像对外再分发仍需核验最终组件。
+- 本次打包调整不更改数据库结构、数据卷和密钥；升级仍应备份并保留旧镜像以便回滚。
+
 ## 1. 环境与边界
 
 - Docker Engine + Docker Compose v2（建议 2.24 或更新版本，支持 `up --wait`）。生产服务器不需要安装 Node.js/pnpm。
@@ -287,6 +298,16 @@ sh scripts/test-docker.sh
 ```
 
 脚本使用唯一项目名、临时环境和独立数据卷，创建临时管理员，验证生产 API、PDF/DOCX 上传解析、Worker 消费、容器重建后数据保留及两个 Worker 启动，最后删除**该测试项目**的容器、卷和镜像。不使用真实模型密钥，不要手工把冒烟脚本指向生产数据。
+
+也可验证一个已构建的本地镜像（不会重新构建或删除该镜像，仍只使用独立的临时容器和数据卷）：
+
+```bash
+docker build -t yanxing:slim .
+YANXING_TEST_IMAGE=yanxing:slim sh scripts/test-docker.sh
+docker image ls yanxing:slim
+```
+
+体积比较应使用相同 Docker 存储后端和统计口径；本地 `docker image ls`、未压缩层合计、仓库压缩传输量及 `docker save | gzip` 文件大小不一定相同。构建缓存和运行时数据卷不属于应用运行镜像的功能产物。
 
 没有 Docker 的开发机可先执行 `pnpm build`，再运行 `node scripts/test-production.mjs`。该脚本复制运行产物到临时目录，使用独立数据库和临时本地端口，完成后关闭进程并删除临时数据；它不验证镜像依赖裁剪、容器权限或 Compose 行为，不能替代 Docker 冒烟测试。
 

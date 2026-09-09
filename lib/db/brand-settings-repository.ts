@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
 import {
+  DEFAULT_BRAND_SETTINGS,
   DEFAULT_HEADER_LOGO_URL,
   DEFAULT_LOGIN_WATERMARK_URL,
   MAX_BRAND_ASSET_BYTES,
@@ -58,6 +59,16 @@ export function getPublicBrandSettings(database: DatabaseSync = getDatabase()): 
     revision: row.revision,
     updatedAt: row.updated_at,
     updatedBy: row.updated_by,
+  }
+}
+
+// Page decoration may fall back; APIs and writes must keep strict validation.
+export function getPublicBrandSettingsOrDefault(database?: DatabaseSync): PublicBrandSettings {
+  try {
+    return getPublicBrandSettings(database)
+  } catch (error) {
+    console.error('[yanxing-branding] 品牌设置读取失败，页面使用默认品牌。', error)
+    return { ...DEFAULT_BRAND_SETTINGS }
   }
 }
 

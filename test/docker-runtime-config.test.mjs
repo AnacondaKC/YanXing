@@ -31,20 +31,20 @@ test('Docker entrypoint runs services in foreground with explicit production mod
     await writeFile(path.join(directory, 'node'), '#!/bin/sh\nprintf \"%s\\n\" \"$@\"\n', { mode: 0o700 })
     const entrypoint = new URL('../scripts/docker-entrypoint.sh', import.meta.url).pathname
     for (const [command, expected] of [
-      ['worker', '/app/worker/index.ts'],
-      ['migrate', '/app/scripts/migrate.ts'],
-      ['user:create', '/app/scripts/create-user.ts'],
-      ['storage:reconcile', '/app/scripts/storage-maintenance.ts'],
+      ['worker', '/app/.runtime/worker/index.mjs'],
+      ['migrate', '/app/.runtime/scripts/migrate.mjs'],
+      ['user:create', '/app/.runtime/scripts/create-user.mjs'],
+      ['storage:reconcile', '/app/.runtime/scripts/storage-maintenance.mjs'],
     ]) {
       const result = spawnSync('/bin/sh', [entrypoint, command], { encoding: 'utf8', env: { ...process.env, PATH: directory } })
       assert.equal(result.status, 0, result.stderr)
       assert.deepEqual(result.stdout.trim().split('\n'), [
-        '/app/scripts/docker-runtime-config.mjs', '--import', 'tsx', expected, '--mode=production',
+        '/app/scripts/docker-runtime-config.mjs', expected, '--mode=production',
       ])
     }
     const web = spawnSync('/bin/sh', [entrypoint], { encoding: 'utf8', env: { ...process.env, PATH: directory } })
     assert.equal(web.status, 0, web.stderr)
-    assert.match(web.stdout, /next\nstart\n--hostname\n0.0.0.0\n--port\n3000/)
+    assert.deepEqual(web.stdout.trim().split('\n'), ['/app/scripts/docker-runtime-config.mjs', '/app/server.js'])
   } finally {
     await rm(directory, { recursive: true, force: true })
   }
@@ -52,7 +52,10 @@ test('Docker entrypoint runs services in foreground with explicit production mod
 
 test('image normalizes readable code permissions before creating private storage', async () => {
   const dockerfile = await readFile(new URL('../Dockerfile', import.meta.url), 'utf8')
-  const normalizeCode = dockerfile.indexOf('chmod -R a+rX /app')
+  const normalizeCode = dockerfile.indexOf('chmod -R a=rX /app')
+  assert.ok(dockerfile.includes('COPY --from=build --chown=root:root /app/.docker-runtime ./'))
+  assert.ok(dockerfile.includes('install -d -m 0700 -o node -g node /app/storage /app/.next/cache'))
+  assert.doesNotMatch(dockerfile, /COPY.*--chown=node:node/)
   const privateStorage = dockerfile.indexOf('install -d -m 0700 -o node -g node /app/storage')
   assert.ok(normalizeCode >= 0 && privateStorage > normalizeCode)
   assert.ok(dockerfile.includes('--package-import-method=copy'))

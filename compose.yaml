@@ -4,7 +4,6 @@ x-environment: &environment
   NODE_ENV: production
   PORT: "3000"
   YANXING_NEXT_DIST_DIR: .next
-  TSX_TSCONFIG_PATH: /app/tsconfig.json
   YANXING_DATABASE_PATH: /app/storage/yanxing.sqlite
   YANXING_KNOWLEDGE_STORAGE_ROOT: /app/storage/knowledge
   REPORT_MAX_UPLOAD_BYTES: ${REPORT_MAX_UPLOAD_BYTES:-26214400}

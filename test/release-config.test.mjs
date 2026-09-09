@@ -27,12 +27,13 @@ test('Docker and environment examples use the same Node and pnpm baseline', asyn
   }
 })
 
-test('production dependency pruning is non-interactive without setting runtime CI', async () => {
+test('production image copies only assembled runtime without setting runtime CI', async () => {
   const dockerfile = await readProjectFile('Dockerfile')
-  const productionStage = dockerfile.split('FROM dependencies AS production-dependencies')[1]?.split('FROM ')[0]
-  assert.ok(productionStage?.includes('RUN CI=true pnpm prune --prod'))
+  assert.ok(dockerfile.includes('RUN pnpm build:docker'))
+  assert.ok(dockerfile.includes('COPY --from=build --chown=root:root /app/.docker-runtime ./'))
   const runtimeStage = dockerfile.split(' AS runtime')[1]
   assert.ok(runtimeStage)
+  assert.doesNotMatch(runtimeStage, /COPY.*\/app\/node_modules|COPY.*\/app\/\.next/)
   assert.doesNotMatch(runtimeStage, /\bCI\s*=/)
 })
 

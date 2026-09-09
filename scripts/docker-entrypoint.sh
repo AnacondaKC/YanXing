@@ -10,27 +10,28 @@ if [ "$#" -eq 0 ]; then set -- web; fi
 case "$1" in
   web)
     shift
-    exec node /app/node_modules/next/dist/bin/next start --hostname 0.0.0.0 --port 3000 "$@"
+    export HOSTNAME=0.0.0.0
+    exec node /app/server.js "$@"
     ;;
   worker)
     shift
-    exec node --import tsx /app/worker/index.ts --mode=production "$@"
+    exec node /app/.runtime/worker/index.mjs --mode=production "$@"
     ;;
   migrate)
     shift
-    exec node --import tsx /app/scripts/migrate.ts --mode=production "$@"
+    exec node /app/.runtime/scripts/migrate.mjs --mode=production "$@"
     ;;
   user:create)
     shift
-    exec node --import tsx /app/scripts/create-user.ts --mode=production "$@"
+    exec node /app/.runtime/scripts/create-user.mjs --mode=production "$@"
     ;;
   storage:reconcile)
     shift
-    exec node --import tsx /app/scripts/storage-maintenance.ts --mode=production "$@"
+    exec node /app/.runtime/scripts/storage-maintenance.mjs --mode=production "$@"
     ;;
   storage:relocate)
     shift
-    exec node --import tsx /app/scripts/relocate-storage.ts "$@"
+    exec node /app/.runtime/scripts/relocate-storage.mjs "$@"
     ;;
   *)
     exec "$@"

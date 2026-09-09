@@ -66,6 +66,7 @@ Apache 2.0 **不**授予研行或任何第三方商标使用权（见 `LICENSE` 
 | `tailwindcss` | 4.3.3 | MIT | https://github.com/tailwindlabs/tailwindcss |
 | `postcss` | 8.5.25 | MIT（Andrey Sitnik） | https://github.com/postcss/postcss |
 | `typescript` | 5.9.3 | Apache-2.0 | https://github.com/microsoft/TypeScript |
+| `esbuild` | 0.28.1 | MIT（Evan Wallace） | https://github.com/evanw/esbuild |
 | `@types/react` | 19.2.18 | MIT | https://github.com/DefinitelyTyped/DefinitelyTyped |
 | `@types/react-dom` | 19.2.4 | MIT | https://github.com/DefinitelyTyped/DefinitelyTyped |
 | `@types/node` | 24.13.3 | MIT | https://github.com/DefinitelyTyped/DefinitelyTyped |

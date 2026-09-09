@@ -16,6 +16,7 @@ const VALUE_FLAGS = new Set(['from', 'to', 'map', 'database'])
 
 export const RELOCATION_USAGE = [
   '用法: node --import tsx scripts/relocate-storage.ts --from OLD_STORAGE_ROOT [--to /app/storage] [--map OLD=NEW] [--database PATH] [--apply]',
+  'Docker 用法: docker compose run --rm --no-deps migrate storage:relocate [同上参数]',
   '将 report_versions、knowledge_items、storage_allocations 的绝对 source_path 从旧存储根改写到 Docker 存储根。',
   '默认干跑并回滚事务；传入 --apply 才提交。',
   RELOCATION_OFFLINE_WARNING,
