@@ -26,11 +26,15 @@ ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
     PORT=3000 \
     YANXING_NEXT_DIST_DIR=.next \
+    YANXING_WORKER_HEARTBEAT_PATH=/tmp/yanxing-worker-heartbeat.json \
     YANXING_DATABASE_PATH=/app/storage/yanxing.sqlite \
     YANXING_KNOWLEDGE_STORAGE_ROOT=/app/storage/knowledge
 COPY --from=build --chown=root:root /app/.docker-runtime ./
 RUN install -d -m 0700 -o node -g node /app/storage /app/.next/cache
 USER node
 EXPOSE 3000
+STOPSIGNAL SIGTERM
+HEALTHCHECK --interval=15s --timeout=10s --start-period=60s --retries=3 \
+    CMD ["node", "/app/scripts/docker-healthcheck.mjs"]
 ENTRYPOINT ["/bin/sh", "/app/scripts/docker-entrypoint.sh"]
-CMD ["web"]
+CMD []

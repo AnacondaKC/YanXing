@@ -8,6 +8,7 @@ const runtimeFiles = [
   'LICENSE',
   '.docker-build.json',
   'scripts/docker-entrypoint.sh',
+  'scripts/docker-supervisor.mjs',
   'scripts/docker-runtime-config.mjs',
   'scripts/docker-healthcheck.mjs',
   'scripts/docker-security-smoke.mjs',

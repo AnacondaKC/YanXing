@@ -5,17 +5,14 @@ umask 077
 # Validate the image's build-time upload boundary before starting any service.
 node /app/scripts/docker-runtime-config.mjs
 
-if [ "$#" -eq 0 ]; then set -- web; fi
+if [ "$#" -eq 0 ]; then
+  exec node /app/scripts/docker-supervisor.mjs
+fi
 
 case "$1" in
-  web)
-    shift
-    export HOSTNAME=0.0.0.0
-    exec node /app/server.js "$@"
-    ;;
-  worker)
-    shift
-    exec node /app/.runtime/worker/index.mjs --mode=production "$@"
+  web|worker|all)
+    printf '%s\n' "旧的 $1 服务模式已移除。请无参数启动单容器 supervisor。" >&2
+    exit 1
     ;;
   migrate)
     shift

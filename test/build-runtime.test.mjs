@@ -23,6 +23,7 @@ test('runtime nft extra entries include docker scripts and the parser resolver',
   assert.deepEqual(EXTRA_TRACE_ENTRY_PATHS, [
     'scripts/docker-runtime-config.mjs',
     'scripts/docker-healthcheck.mjs',
+    'scripts/docker-supervisor.mjs',
     'scripts/deployment-smoke.mjs',
     'lib/documents/parser-child-runtime.mjs',
     'lib/config/load-env.mjs',

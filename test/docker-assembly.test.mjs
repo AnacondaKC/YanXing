@@ -36,6 +36,7 @@ test('Docker assembly merges traced runtime, static assets and licenses without 
     'LICENSE': 'project license',
     '.docker-build.json': '{}',
     'scripts/docker-entrypoint.sh': '#!/bin/sh',
+    'scripts/docker-supervisor.mjs': 'supervisor',
     'scripts/docker-runtime-config.mjs': '',
     'scripts/docker-healthcheck.mjs': '',
     'scripts/docker-security-smoke.mjs': '',
@@ -57,6 +58,7 @@ test('Docker assembly merges traced runtime, static assets and licenses without 
     const output = path.join(root, '.docker-runtime')
     assert.equal(await readFile(path.join(output, 'node_modules/example/index.js'), 'utf8'), 'dependency')
     assert.equal(await readFile(path.join(output, '.runtime/worker/index.mjs'), 'utf8'), 'worker')
+    assert.equal(await readFile(path.join(output, 'scripts/docker-supervisor.mjs'), 'utf8'), 'supervisor')
     assert.equal(await readFile(path.join(output, '.next/static/chunks/app.js'), 'utf8'), 'client')
     assert.equal(await readFile(path.join(output, 'public/logo.svg'), 'utf8'), 'logo')
     assert.equal(await readFile(path.join(output, 'third-party-licenses/node_modules/.pnpm/example/node_modules/example/LICENSE'), 'utf8'), 'license')

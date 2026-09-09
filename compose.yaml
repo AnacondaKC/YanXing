@@ -1,85 +1,45 @@
 name: yanxing
 
-x-environment: &environment
-  NODE_ENV: production
-  PORT: "3000"
-  YANXING_NEXT_DIST_DIR: .next
-  YANXING_DATABASE_PATH: /app/storage/yanxing.sqlite
-  YANXING_KNOWLEDGE_STORAGE_ROOT: /app/storage/knowledge
-  REPORT_MAX_UPLOAD_BYTES: ${REPORT_MAX_UPLOAD_BYTES:-26214400}
-
-x-service: &service
-  image: ${YANXING_IMAGE:-yanxing:local}
-  build:
-    context: .
-    args:
-      NODE_IMAGE: ${YANXING_NODE_IMAGE:-node:24.20.0-bookworm-slim}
-      REPORT_MAX_UPLOAD_BYTES: ${REPORT_MAX_UPLOAD_BYTES:-26214400}
-  env_file:
-    - ${YANXING_ENV_FILE:-.env}
-  environment: *environment
-  init: true
-  user: "1000:1000"
-  volumes:
-    - data:/app/storage
-  tmpfs:
-    - /tmp:rw,noexec,nosuid,size=256m,mode=1777
-  cap_drop:
-    - ALL
-  security_opt:
-    - no-new-privileges:true
-  pids_limit: 256
-  logging:
-    driver: json-file
-    options:
-      max-size: "10m"
-      max-file: "3"
-
 services:
-  migrate:
-    <<: *service
-    command: ["migrate"]
-    restart: "no"
-    mem_limit: 512m
-
-  web:
-    <<: *service
-    command: ["web"]
+  app:
+    image: ${YANXING_IMAGE:-yanxing:local}
+    build:
+      context: .
+      args:
+        NODE_IMAGE: ${YANXING_NODE_IMAGE:-node:24.20.0-bookworm-slim}
+        REPORT_MAX_UPLOAD_BYTES: ${REPORT_MAX_UPLOAD_BYTES:-26214400}
+    env_file:
+      - ${YANXING_ENV_FILE:-.env}
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      YANXING_NEXT_DIST_DIR: .next
+      YANXING_DATABASE_PATH: /app/storage/yanxing.sqlite
+      YANXING_KNOWLEDGE_STORAGE_ROOT: /app/storage/knowledge
+      YANXING_WORKER_HEARTBEAT_PATH: /tmp/yanxing-worker-heartbeat.json
+      REPORT_MAX_UPLOAD_BYTES: ${REPORT_MAX_UPLOAD_BYTES:-26214400}
+    init: true
+    user: "1000:1000"
     restart: unless-stopped
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
     ports:
       - "${YANXING_BIND_ADDRESS:-127.0.0.1}:${YANXING_HTTP_PORT:-3000}:3000"
-    mem_limit: ${YANXING_WEB_MEMORY:-2g}
-    cpus: ${YANXING_WEB_CPUS:-2}
-    stop_grace_period: 60s
-    healthcheck:
-      test: ["CMD", "node", "scripts/docker-healthcheck.mjs", "web"]
-      interval: 15s
-      timeout: 10s
-      start_period: 60s
-      retries: 3
-
-  worker:
-    <<: *service
-    command: ["worker"]
-    restart: unless-stopped
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-    environment:
-      <<: *environment
-      YANXING_WORKER_HEARTBEAT_PATH: /tmp/yanxing-worker-heartbeat.json
-    mem_limit: ${YANXING_WORKER_MEMORY:-2g}
-    cpus: ${YANXING_WORKER_CPUS:-2}
-    stop_grace_period: 90s
-    healthcheck:
-      test: ["CMD", "node", "scripts/docker-healthcheck.mjs", "worker"]
-      interval: 15s
-      timeout: 10s
-      start_period: 60s
-      retries: 3
+    volumes:
+      - data:/app/storage
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    mem_limit: ${YANXING_MEMORY:-4g}
+    cpus: ${YANXING_CPUS:-4}
+    stop_grace_period: 100s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
   data:

@@ -41,20 +41,23 @@ export function inspectWorkerHeartbeat({ content, nowMs }) {
 }
 
 export async function runDockerHealthcheck(argv, env = process.env) {
-  if (argv.length !== 1 || (argv[0] !== 'web' && argv[0] !== 'worker')) {
-    throw new Error('Usage: node scripts/docker-healthcheck.mjs web|worker')
+  if (argv.length > 1 || (argv.length === 1 && argv[0] !== 'web' && argv[0] !== 'worker')) {
+    throw new Error('Usage: node scripts/docker-healthcheck.mjs [web|worker]')
   }
-  if (argv[0] === 'web') {
-    await checkWebHealth()
-    return
-  }
-  checkWorkerHealth(env)
+  if (argv[0] !== 'web') checkWorkerHealth(env)
+  if (argv[0] !== 'worker') await checkWebHealth(env)
 }
 
-async function checkWebHealth() {
+async function checkWebHealth(env) {
+  const port = env.PORT?.trim() || '3000'
+  if (!/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535) {
+    throw new Error('Invalid web health port')
+  }
+  const url = new URL(webHealthUrl)
+  url.port = port
   let response
   try {
-    response = await fetch(webHealthUrl, {
+    response = await fetch(url.href, {
       method: 'GET',
       redirect: 'error',
       signal: AbortSignal.timeout(webHealthTimeoutMs),

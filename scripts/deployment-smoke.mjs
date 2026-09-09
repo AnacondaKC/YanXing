@@ -56,7 +56,7 @@ Optional:
   YANXING_SMOKE_MARKER=<stable marker>
   YANXING_SMOKE_MANIFEST_PATH=<cwd>/storage/.deployment-smoke.json
   YANXING_SMOKE_TIMEOUT_MS=${DEFAULT_TIMEOUT_MS}
-  YANXING_SMOKE_MODEL_HOST=${DEFAULT_MODEL_HOST}  (Docker Compose worker: web)
+  YANXING_SMOKE_MODEL_HOST=${DEFAULT_MODEL_HOST}  (same-container mock; default 127.0.0.1)
   YANXING_SMOKE_EXPECTED_FAILURE=<unique token returned by the in-process model stub>
 
 Usage:

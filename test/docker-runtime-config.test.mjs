@@ -25,13 +25,12 @@ test('Docker refuses invalid build metadata', () => {
   }
 })
 
-test('Docker entrypoint runs services in foreground with explicit production mode', async () => {
+test('Docker entrypoint starts the supervisor by default and preserves maintenance commands', async () => {
   const directory = await mkdtemp(path.join(tmpdir(), 'yanxing-entrypoint-'))
   try {
     await writeFile(path.join(directory, 'node'), '#!/bin/sh\nprintf \"%s\\n\" \"$@\"\n', { mode: 0o700 })
     const entrypoint = new URL('../scripts/docker-entrypoint.sh', import.meta.url).pathname
     for (const [command, expected] of [
-      ['worker', '/app/.runtime/worker/index.mjs'],
       ['migrate', '/app/.runtime/scripts/migrate.mjs'],
       ['user:create', '/app/.runtime/scripts/create-user.mjs'],
       ['storage:reconcile', '/app/.runtime/scripts/storage-maintenance.mjs'],
@@ -44,7 +43,12 @@ test('Docker entrypoint runs services in foreground with explicit production mod
     }
     const web = spawnSync('/bin/sh', [entrypoint], { encoding: 'utf8', env: { ...process.env, PATH: directory } })
     assert.equal(web.status, 0, web.stderr)
-    assert.deepEqual(web.stdout.trim().split('\n'), ['/app/scripts/docker-runtime-config.mjs', '/app/server.js'])
+    assert.deepEqual(web.stdout.trim().split('\n'), ['/app/scripts/docker-runtime-config.mjs', '/app/scripts/docker-supervisor.mjs'])
+    for (const removedMode of ['web', 'worker', 'all']) {
+      const result = spawnSync('/bin/sh', [entrypoint, removedMode], { encoding: 'utf8', env: { ...process.env, PATH: directory } })
+      assert.notEqual(result.status, 0, removedMode + ' must not start a partial service')
+      assert.doesNotMatch(result.stdout, /server\.js|worker\/index\.mjs|docker-supervisor\.mjs/)
+    }
   } finally {
     await rm(directory, { recursive: true, force: true })
   }

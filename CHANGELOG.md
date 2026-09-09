@@ -1,5 +1,30 @@
 # 更新记录
 
+## 0.1.2 — 2026-09-09
+
+本次版本将 Docker 部署统一为单容器，并完善进程生命周期、健康检查、测试隔离及升级文档。**这是部署方式的兼容性变更，旧镜像与新 Compose 不可混用。**
+
+### 部署
+
+- Docker Compose 改为仅一个 `app` 服务：默认入口启动 supervisor，由它先执行数据库迁移，再同时管理 Web 与 Worker；不再提供 `web` / `worker` / `migrate` 服务或 `all` 启动模式。
+- `app` 共享资源上限改为 `YANXING_MEMORY`（默认 4g）与 `YANXING_CPUS`（默认 4），`stop_grace_period` 为 100 秒（supervisor 内部宽限约 80 秒）。合并不节省内存；单机 SQLite 不要扩容容器。
+- 健康检查改为联合检查 Web `/api/health` 与 Worker 心跳（默认 `/tmp/yanxing-worker-heartbeat.json`）。`unhealthy` 本身不会触发 Docker 重启；Web 或 Worker 任一退出时，supervisor 停止另一方并以非零状态退出，由 Docker 重启整个容器。
+- 管理命令改为 `docker compose exec app /app/scripts/docker-entrypoint.sh user:create` 等；离线维护在停机后使用 `docker compose run --rm --no-deps app …`。
+- 从 `v0.1.1` 及更早的多容器部署升级时，须先用旧 Compose（`web` / `worker` / `migrate`）备份并执行 `docker compose down`（不要加 `-v`），保留同一项目名、数据卷和密钥后再切换新配置，以免孤儿 Worker 继续领取任务。已发布的 `v0.1.1` 镜像不能与新 Compose 搭配；使用 `v0.1.2` 对应的源码和镜像，镜像发布成功前可本地构建。旧 `YANXING_WEB_MEMORY` / `YANXING_WORKER_MEMORY` 与对应 CPU 限制不再生效，应改为共享的 `YANXING_MEMORY` / `YANXING_CPUS`。
+
+### 测试与安全
+
+- 健康测试显式隔离工作目录、数据库和知识库路径，直接运行测试文件也不会让 Worker 存储维护扫描项目资料。
+- 生命周期测试统一登记 supervisor、嵌套 runner 与执行 Promise；回调异常后先请求停止并有界等待，再收集后代、强制清理和回收句柄，保留原始测试错误。
+- 增加启动早期失败、未手动登记 PID、嵌套 runner 失败及忽略 TERM 等清理回归，完善迁移门禁、进程退出、信号处理、心跳与容器重启冒烟。
+- 管理员创建示例补齐隐藏输入、导出及清除密码变量的步骤。
+
+### 发布与升级
+
+- 本次合并不改变数据库结构、数据卷布局或密钥格式；升级仍须先备份并保留旧镜像，不支持直接混用新旧 Compose。
+- 发布前本地代码检查、601 项测试、生产构建，以及单容器 Docker 冒烟和纯 `docker run` 验证通过。
+- Release 发布后须等待 GitHub Actions 的 CI、Docker 部署冒烟与镜像推送全部成功，再拉取 `ghcr.io/anacondakc/yanxing:v0.1.2`（`linux/amd64`）。成功的稳定版发布才更新 `latest`；生产环境应固定版本标签。
+
 ## 0.1.1 — 2026-09-09
 
 本次维护版本重点提升 AI 分析稳定性、提示词预算校验及 Docker 部署可靠性。

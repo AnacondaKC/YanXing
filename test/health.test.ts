@@ -8,8 +8,11 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { NextRequest } from 'next/server'
 
+const originalWorkingDirectory = process.cwd()
 const directory = await mkdtemp(path.join(tmpdir(), 'yanxing-health-'))
+process.chdir(directory)
 process.env.YANXING_DATABASE_PATH = path.join(directory, 'health.sqlite')
+process.env.YANXING_KNOWLEDGE_STORAGE_ROOT = path.join(directory, 'knowledge')
 process.env.YANXING_WORKER_POLL_MS = '100'
 delete process.env.YANXING_WORKER_HEARTBEAT_PATH
 delete process.env.YANXING_WORKER_READY_PATH
@@ -38,6 +41,7 @@ const originalHeartbeatPath = process.env.YANXING_WORKER_HEARTBEAT_PATH
 
 test.after(async () => {
   stopWorker()
+  process.chdir(originalWorkingDirectory)
   await rm(directory, { recursive: true, force: true })
 })
 
@@ -142,7 +146,7 @@ test('health CLI worker mode accepts a fresh heartbeat and rejects missing, stal
     () => runDockerHealthcheck(['worker'], { ...process.env, YANXING_WORKER_HEARTBEAT_PATH: path.join(directory, 'missing.json') }),
     /missing/,
   )
-  await assert.rejects(() => runDockerHealthcheck([]), /Usage/)
+  await assert.rejects(() => runDockerHealthcheck([], { ...process.env, YANXING_WORKER_HEARTBEAT_PATH: '' }), /not set/)
   await assert.rejects(() => runDockerHealthcheck(['web', 'worker']), /Usage/)
 })
 
@@ -165,9 +169,9 @@ test('health CLI process contract for web|worker', () => {
   const malformed = spawnCli(['worker'], { YANXING_WORKER_HEARTBEAT_PATH: heartbeatPath })
   assert.notEqual(malformed.status, 0)
 
-  const usage = spawnCli([])
+  const usage = spawnCli(['invalid'])
   assert.notEqual(usage.status, 0)
-  assert.match(usage.stderr, /Usage: node scripts\/docker-healthcheck\.mjs web\|worker/)
+  assert.match(usage.stderr, /Usage: node scripts\/docker-healthcheck\.mjs \[web\|worker\]/)
 
   const unavailableFetchOverride = 'globalThis.fetch=()=>Promise.reject(new Error("unavailable"))'
   const webUnavailable = spawnCli(['web'], {}, nodeImportDataModule(unavailableFetchOverride))
@@ -178,6 +182,34 @@ test('health CLI process contract for web|worker', () => {
     'globalThis.fetch=()=>Promise.resolve(new Response(JSON.stringify({status:"ok"}),{status:200}))'
   const webHealthy = spawnCli(['web'], {}, nodeImportDataModule(healthyFetchOverride))
   assert.equal(webHealthy.status, 0, webHealthy.stderr)
+})
+
+test('default container health requires both Web and a fresh Worker heartbeat', () => {
+  const heartbeatPath = path.join(directory, 'combined-heartbeat.json')
+  const environment = { YANXING_WORKER_HEARTBEAT_PATH: heartbeatPath, PORT: '3100' }
+  const healthyWeb = nodeImportDataModule(
+    'globalThis.fetch=(url)=>{if(url!=="http://127.0.0.1:3100/api/health")throw new Error("wrong port");return Promise.resolve(new Response(JSON.stringify({status:"ok"}),{status:200}))}',
+  )
+  writeFileSync(heartbeatPath, JSON.stringify({ status: 'ok', checkedAt: Date.now(), pollMs: 1_000 }))
+  const healthy = spawnCli([], environment, healthyWeb)
+  assert.equal(healthy.status, 0, healthy.stderr)
+
+  const unavailableWeb = nodeImportDataModule('globalThis.fetch=()=>Promise.reject(new Error("web unavailable"))')
+  const webFailed = spawnCli([], environment, unavailableWeb)
+  assert.notEqual(webFailed.status, 0)
+  assert.match(webFailed.stderr, /web unavailable/)
+
+  writeFileSync(heartbeatPath, JSON.stringify({ status: 'ok', checkedAt: Date.now() - 120_000, pollMs: 1_000 }))
+  const workerFailed = spawnCli([], environment, healthyWeb)
+  assert.notEqual(workerFailed.status, 0)
+  assert.match(workerFailed.stderr, /stale or unhealthy/)
+
+  const missingWorker = spawnCli([], { ...environment, YANXING_WORKER_HEARTBEAT_PATH: path.join(directory, 'absent.json') }, healthyWeb)
+  assert.notEqual(missingWorker.status, 0)
+  assert.match(missingWorker.stderr, /missing/)
+  const invalidPort = spawnCli(['web'], { PORT: '3000/path' }, healthyWeb)
+  assert.notEqual(invalidPort.status, 0)
+  assert.match(invalidPort.stderr, /Invalid web health port/)
 })
 
 test('worker poll loop writes a heartbeat and removes it on stop without touching the ready signal', async () => {

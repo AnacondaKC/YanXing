@@ -26,6 +26,7 @@ export const COMPILED_RUNTIME_ENTRY_SOURCES = [
 export const EXTRA_TRACE_ENTRY_PATHS = [
   'scripts/docker-runtime-config.mjs',
   'scripts/docker-healthcheck.mjs',
+  'scripts/docker-supervisor.mjs',
   'scripts/deployment-smoke.mjs',
   'lib/documents/parser-child-runtime.mjs',
   'lib/config/load-env.mjs',

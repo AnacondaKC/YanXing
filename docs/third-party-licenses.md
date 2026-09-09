@@ -147,7 +147,7 @@ Apache 2.0 **不**授予研行或任何第三方商标使用权（见 `LICENSE` 
 
 ## 10. 以后若分发镜像或预构建二进制
 
-`Dockerfile` 默认 `NODE_IMAGE=node:24.20.0-bookworm-slim`，运行阶段会复制 `node_modules`（`pnpm prune --prod` 之后）、`.next`、`public`、部分源码与 `LICENSE`。那是**另一类发行物**。
+`Dockerfile` 默认 `NODE_IMAGE=node:24.20.0-bookworm-slim`。当前构建将 Next standalone 与预编译 Worker/管理入口追踪到的运行依赖、静态资源和第三方许可文件装入运行阶段，而不是复制完整 `node_modules`。那是**另一类发行物**。
 
 在发布预构建镜像或可执行制品之前，必须另做终态审查，至少包括：
 

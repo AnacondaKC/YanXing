@@ -37,6 +37,23 @@ test('production image copies only assembled runtime without setting runtime CI'
   assert.doesNotMatch(runtimeStage, /\bCI\s*=/)
 })
 
+test('Docker deployment exposes one supervised app with image-level combined health', async () => {
+  const compose = await readProjectFile('compose.yaml')
+  const services = compose.split('services:\n')[1].split('\nvolumes:')[0]
+  assert.deepEqual([...services.matchAll(/^  ([a-z]+):$/gm)].map((match) => match[1]), ['app'])
+  assert.doesNotMatch(compose, /depends_on:|YANXING_(?:WEB|WORKER)_(?:MEMORY|CPUS)|command:/)
+  assert.match(compose, /init: true/)
+  assert.match(compose, /stop_grace_period: 100s/)
+  assert.match(compose, /data:\/app\/storage/)
+  assert.ok(compose.includes('mem_limit: ${YANXING_MEMORY:-4g}'))
+  assert.ok(compose.includes('cpus: ${YANXING_CPUS:-4}'))
+  const dockerfile = await readProjectFile('Dockerfile')
+  assert.match(dockerfile, /HEALTHCHECK --interval=15s --timeout=10s --start-period=60s --retries=3/)
+  assert.ok(dockerfile.includes('CMD ["node", "/app/scripts/docker-healthcheck.mjs"]'))
+  assert.match(dockerfile, /CMD \[\]\s*$/)
+  assert.match(dockerfile, /YANXING_WORKER_HEARTBEAT_PATH=\/tmp\/yanxing-worker-heartbeat.json/)
+})
+
 test('CI reads the repository Node baseline and packageManager without publishing images', async () => {
   const workflow = await readProjectFile('.github/workflows/ci.yml')
   assert.equal((workflow.match(/node-version-file: \.nvmrc/g) ?? []).length, 2)
