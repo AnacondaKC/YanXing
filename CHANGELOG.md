@@ -2,7 +2,7 @@
 
 ## 0.1.0
 
-首个开源源码版本，基于 Apache-2.0 分发。
+首个开源版本，基于 Apache-2.0 分发。
 
 ### 功能与部署
 
@@ -10,11 +10,15 @@
 - 提供账号角色、课题成员编辑权限、Token 预算和独立 Worker 任务执行。
 - 提供 Dockerfile / Compose 本地构建方案、Web / Worker 健康检查、部署冒烟测试和离线存储路径迁移工具。
 - 统一 Node.js 24.x（≥ 24.20.0）；本地、CI 和 Docker 基准为 Node.js 24.20.0、pnpm 11.18.0。
+- GitHub Release 发布（`published`）后，由 `.github/workflows/docker-release.yml` 以 `workflow_call` 调用现有 CI（代码检查、测试、构建与 Docker 部署冒烟均须通过），再构建 `linux/amd64` 镜像，使用 `GITHUB_TOKEN` 推送到 `ghcr.io/anacondakc/yanxing`。
+- 镜像标签为该 Release 对应的 Git 标签（例如 `v0.1.0`）；仅非预发布成功时更新 `latest`。`latest` 表示最近一次成功的稳定版发布，不按 semver 比较。工作流不提供 `workflow_dispatch`。
+- 可通过在 `.env` 设置 `YANXING_IMAGE` 后执行 `docker compose pull` 与 `docker compose up -d --no-build` 部署预构建镜像。上传上限构建参数为 `26214400`，须与运行时一致；自定义上限需自行构建。
 
 ### 分发范围
 
-- 仅分发源码、文档、已确认可公开的品牌素材与截图，以及 Docker 构建配置。
-- 不分发预构建容器镜像、依赖目录、构建产物、数据库、上传资料或运行密钥。
+- 分发源码、文档、已确认可公开的品牌素材与截图，以及 Docker 构建配置。
+- GitHub Release 的 Actions 成功后，向 GHCR 推送 `linux/amd64` 预构建镜像。镜像是否可用，以对应 Release 的 Actions 成功结果和 Packages 标签为准。GHCR 包默认私有，公开可见性需在 GitHub Packages 另行设置。
+- 源码包不附带本地依赖目录或构建产物；不分发数据库、上传资料或运行密钥。
 - 第三方组件保留各自许可证，核验范围与后续二进制再分发注意事项见 [第三方许可证说明](docs/third-party-licenses.md)。
 
 ### 使用边界

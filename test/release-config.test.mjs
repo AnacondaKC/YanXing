@@ -51,6 +51,8 @@ test('release publishing waits for the reusable CI workflow', async () => {
   const ci = await readProjectFile('.github/workflows/ci.yml')
   const release = await readProjectFile('.github/workflows/docker-release.yml')
   assert.match(ci, /^  workflow_call:/m)
+  assert.equal(ci.split('ref: ${{ github.sha }}').length - 1, 2)
+  assert.ok(release.includes('ref: ${{ github.sha }}'))
   assert.match(release, /release:\s+types: \[published\]/)
   assert.match(release, /verify:\s+uses: \.\/\.github\/workflows\/ci\.yml/)
   assert.match(release, /publish:\s+needs: verify/)

@@ -156,6 +156,12 @@ pnpm status
 
 宿主机只需 Docker Engine 和 Docker Compose v2（建议 2.24+），无需安装 Node.js 或 pnpm。以下步骤用于**全新数据部署**；已有部署请先阅读迁移与密钥保留说明。
 
+GitHub 在 Release **发布（`published`）** 后，由 [镜像发布工作流](.github/workflows/docker-release.yml) 先以 `workflow_call` 调用 [CI](.github/workflows/ci.yml)（代码检查 / 测试 / 构建与 Docker 部署冒烟均须通过），再构建 `linux/amd64` 镜像，使用 `GITHUB_TOKEN` 推送到 `ghcr.io/anacondakc/yanxing`。镜像打上该 Release 对应的 Git 标签（例如 `v0.1.0`）；仅当该 Release **未**标记为预发布时，才会同时更新 `latest`。`latest` 表示最近一次成功的稳定版发布，不是按 semver 比较得到的最高版本。该工作流没有 `workflow_dispatch`。镜像是否可用，以对应 Release 的 Actions 成功结果和 Packages 标签为准；拉取前请先确认目标标签已存在。GHCR 包默认私有，公开拉取需在 GitHub Packages 另行设置可见性。
+
+预构建镜像的上传上限构建参数为 `26214400`，须与运行时 `REPORT_MAX_UPLOAD_BYTES` 一致；自定义上限需自行构建。
+
+先准备环境文件（两种镜像来源都需要）：
+
 ```bash
 cp .env.example .env
 chmod 600 .env
@@ -163,7 +169,22 @@ chmod 600 .env
 # 生成一次，并将结果保存为 .env 中的 YANXING_SETTINGS_ENCRYPTION_KEY
 openssl rand -hex 32
 # 编辑 .env：填入上述固定密钥，并按需配置模型渠道
+```
 
+**从 GHCR 拉取**（确认 Packages 上已有对应标签后）：在 `.env` 设置 `YANXING_IMAGE=ghcr.io/anacondakc/yanxing:v0.1.0`（将标签换成实际 Git 标签；包仍为私有时先 `docker login ghcr.io`），然后：
+
+```bash
+docker compose config --quiet
+docker compose pull
+docker compose up -d --no-build --wait --wait-timeout 180
+docker compose ps -a
+```
+
+建议加上 `--no-build`。Compose 文件含 `build` 定义：省略该参数时，若本地没有对应镜像，**可能**触发本地构建；`--build` 会明确重新构建。
+
+**本地构建**（默认 `YANXING_IMAGE=yanxing:local`；适用于尚未能从 GHCR 拉取对应标签、需要自定义上传上限，或目标平台不是 `linux/amd64`）：
+
+```bash
 docker compose config --quiet
 docker compose up -d --build --wait --wait-timeout 180
 docker compose ps -a
@@ -183,7 +204,7 @@ unset YANXING_ADMIN_PASSWORD
 > [!IMPORTANT]
 > 默认仅绑定宿主机 `127.0.0.1:3000`。正式登录入口必须配置 **HTTPS 反向代理**，生产认证使用 Secure Cookie。加密密钥生成后应妥善保存，不要在重启或升级时重新生成。
 
-**[阅读完整 Docker 部署指南 →](docs/docker-deployment.md)**，包括 HTTPS、旧数据迁入、备份恢复、升级、资源限制与可选多 Worker 配置。
+**[阅读完整 Docker 部署指南 →](docs/docker-deployment.md)**，包括 GHCR 标签与包可见性、HTTPS、旧数据迁入、备份恢复、升级、资源限制与可选多 Worker 配置。
 
 > [!WARNING]
 > 普通停机使用 `docker compose stop` 或 `docker compose down`。**不要添加 `-v`**：`docker compose down -v` 会删除持久化数据卷。
@@ -257,7 +278,7 @@ storage/            本地运行数据，不纳入版本管理
 | `pnpm test` | 运行自动化测试 |
 | `pnpm check` | 依次执行 lint、test、build |
 
-持续集成执行代码检查、测试、构建及 Docker 部署验证，具体步骤见 [CI 工作流](.github/workflows/ci.yml)。
+持续集成执行代码检查、测试、构建及 Docker 部署验证，具体步骤见 [CI 工作流](.github/workflows/ci.yml)。GitHub Release 发布后，[镜像发布工作流](.github/workflows/docker-release.yml) 会先调用该 CI，两者均通过后再构建并推送 GHCR 镜像。
 
 ### 常见问题
 
@@ -310,7 +331,7 @@ storage/            本地运行数据，不纳入版本管理
 
 本项目基于 **[Apache License 2.0](LICENSE)** 开源。使用、修改和分发时，请遵守许可证条款并保留相应声明。
 
-**0.1.0 首发仅分发源码及 Dockerfile / Compose 构建配置，不提供预构建容器镜像。** 依赖与第三方组件保留各自许可证；源码分发核验、素材确认及后续镜像再分发注意事项见 [第三方许可证说明](docs/third-party-licenses.md)。
+源码发行包含 Dockerfile / Compose 构建配置；GitHub Release 发布成功后，还会按工作流向 GHCR 推送 `linux/amd64` 预构建镜像（见 [生产部署](#生产部署)）。依赖与第三方组件保留各自许可证；源码分发核验、素材确认及镜像再分发注意事项见 [第三方许可证说明](docs/third-party-licenses.md)。
 
 ---
 
