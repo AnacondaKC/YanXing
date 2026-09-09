@@ -46,3 +46,32 @@ test('CI reads the repository Node baseline and packageManager without publishin
   assert.ok(workflow.includes('sh scripts/test-docker.sh'))
   assert.doesNotMatch(workflow, /docker\s+push|push:\s*true|packages:\s*write/)
 })
+
+test('release publishing waits for the reusable CI workflow', async () => {
+  const ci = await readProjectFile('.github/workflows/ci.yml')
+  const release = await readProjectFile('.github/workflows/docker-release.yml')
+  assert.match(ci, /^  workflow_call:/m)
+  assert.match(release, /release:\s+types: \[published\]/)
+  assert.match(release, /verify:\s+uses: \.\/\.github\/workflows\/ci\.yml/)
+  assert.match(release, /publish:\s+needs: verify/)
+  assert.match(release, /packages: write/)
+  assert.match(release, /password: \$\{\{ secrets\.GITHUB_TOKEN \}\}/)
+  assert.match(release, /platforms: linux\/amd64/)
+  assert.match(release, /push: true/)
+})
+
+test('release image tags isolate prereleases and publishing actions are pinned', async () => {
+  const release = await readProjectFile('.github/workflows/docker-release.yml')
+  assert.match(release, /images: ghcr\.io\/anacondakc\/yanxing/)
+  assert.match(release, /latest=false/)
+  assert.match(release, /type=ref,event=tag/)
+  assert.ok(release.includes('type=raw,value=latest,enable=${{ !github.event.release.prerelease }}'))
+  assert.match(release, /cancel-in-progress: false/)
+  const actionReferences = [...release.matchAll(/uses: ([^\s]+)/g)]
+    .map((match) => match[1])
+    .filter((reference) => !reference.startsWith('./'))
+  assert.ok(actionReferences.length > 0)
+  for (const reference of actionReferences) {
+    assert.match(reference, /@[a-f0-9]{40}$/, reference)
+  }
+})
