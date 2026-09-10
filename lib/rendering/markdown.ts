@@ -1,5 +1,6 @@
 const INSIGHT_TYPOGRAPHY_STYLES = `
 :root {
+  color-scheme: only light;
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
   --color-bg: #ffffff;
@@ -11,20 +12,6 @@ const INSIGHT_TYPOGRAPHY_STYLES = `
   --color-line: #e7e5e4;
   --color-surface: #fafaf9;
   --color-code-bg: #f5f5f4;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --color-bg: #1c1917;
-    --color-text: #e7e5e4;
-    --color-text-muted: #a8a29e;
-    --color-heading: #fafaf9;
-    --color-brand: #3d8f6e;
-    --color-brand-soft: rgba(61, 143, 110, 0.16);
-    --color-line: #292524;
-    --color-surface: #292524;
-    --color-code-bg: #292524;
-  }
 }
 
 * {

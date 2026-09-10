@@ -72,6 +72,26 @@ test('first load keeps headings and navigation visible without fabricated zeros 
   assert.doesNotMatch(html, /暂无课题动态|暂无参考资料|>00<|>0<|质量标杆/)
 })
 
+test('quality gauge reserves glyph padding for double and triple digit scores', () => {
+  for (const score of [60, 80, 86, 88, 100]) {
+    const html = renderOverview({
+      projectsState: 'ready',
+      projects: [{
+        id: 'quality-project', ownerId: 'owner', title: '质量测试课题', objective: '',
+        description: '', ownerName: '负责人', status: 'in_progress', milestones: [],
+        createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+        canManage: true, canDelete: true,
+        latestReport: { version: 1, aiScore: score, completeness: score },
+      }],
+    })
+    const quality = panelMarkup(html, '分析质量全景')
+    const scoreLabel = quality.match(/<span class="([^"]*bg-clip-text[^"]*)">([0-9]+)</)
+    assert.ok(scoreLabel)
+    assert.equal(scoreLabel[2], String(score))
+    assert.match(scoreLabel[1], /(?:^| )px-1(?: |$)/)
+  }
+})
+
 test('fast data renders immediately without a mandatory skeleton interval', () => {
   const html = renderOverview({ projectsState: 'ready', statsState: 'ready', stats: readyStats })
   assert.doesNotMatch(html, /yx-overview-skeleton|正在加载/)

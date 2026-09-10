@@ -74,6 +74,28 @@ test('completeness rings share one sweep instead of staggered progress', () => {
   assert.doesNotMatch(html, /yx-completeness-ring[^>]*yx-bar-delay/)
 })
 
+test('completeness progress uses its final score color and transitions only width', () => {
+  for (const overall of [0, 79, 80, 86, 100]) {
+    const html = renderToStaticMarkup(createElement(ReportCompletenessCard, {
+      snapshot: {
+        ...EMPTY_SNAPSHOT,
+        reportCompleteness: {
+          overall,
+          mainGap: '测试完整度',
+          dimensions: [{ id: '研究目标', label: '研究目标', score: overall }],
+        },
+      },
+    }))
+    const progress = html.match(/<div class="([^"]*)" style="width:([^;]+);background-color:([^"]+)"/)
+    assert.ok(progress)
+    assert.equal(progress[2], overall + '%')
+    assert.equal(progress[3], overall >= 80 ? 'var(--yx-brand)' : 'var(--yx-warning)')
+    assert.ok(progress[1].split(' ').includes('transition-[width]'))
+    assert.match(progress[1], /motion-reduce:transition-none/)
+    assert.doesNotMatch(progress[1], /transition-all|transition-colors/)
+  }
+})
+
 test('analyzing score metrics slide like the completeness bar from top to bottom', () => {
   const html = renderToStaticMarkup(createElement(ScoreMetricList, {
     dimensions: [

@@ -3,28 +3,23 @@
 import { AlertCircle, Download, ExternalLink, FileText, Loader2, Maximize2, Minimize2, RefreshCw } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useWorkspaceEntrance } from '@/components/use-workspace-entrance'
-import { isDarkTheme, YX_THEME_CHANGE_EVENT } from '@/components/theme-toggle'
 import { apiFetch } from '@/lib/client-request'
 import type { ReportVersion } from '@/modules/reports/domain'
 
-const DOCX_DARK_BACKGROUND = '#24231f'
-const DOCX_LIGHT_BACKGROUND = 'var(--yx-hover)'
-
-function buildDocxFrameDocument(background: string) {
-  return `<!doctype html>
+const DOCX_FRAME_DOCUMENT = `<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: blob:; font-src data: blob:; style-src 'unsafe-inline' data:;">
 <style>
-:root { color-scheme: light; font-family: "PingFang SC", "Microsoft YaHei", Arial, sans-serif; }
+:root { color-scheme: only light; font-family: "PingFang SC", "Microsoft YaHei", Arial, sans-serif; }
 * { box-sizing: border-box; }
-html, body { min-height: 100%; margin: 0; background: ${background}; }
+html, body { min-height: 100%; margin: 0; background: var(--yx-hover, #efedea); }
 body { overflow: auto; scrollbar-width: thin; scrollbar-color: rgba(15, 23, 42, 0.18) transparent; }
 #document-root { min-height: 100%; }
-.docx-wrapper { min-height: 100%; padding: 20px !important; background: ${background} !important; }
-.docx-wrapper > section.docx { margin: 0 auto 20px !important; border: 1px solid color-mix(in srgb, var(--yx-ink) 9%, transparent) !important; box-shadow: none !important; }
+.docx-wrapper { min-height: 100%; padding: 20px !important; background: var(--yx-hover, #efedea) !important; }
+.docx-wrapper > section.docx { margin: 0 auto 20px !important; border: 1px solid color-mix(in srgb, var(--yx-ink, #37352f) 9%, transparent) !important; box-shadow: none !important; }
 @media (max-width: 720px) {
   .docx-wrapper { padding: 8px !important; }
   .docx-wrapper > section.docx { margin-bottom: 8px !important; }
@@ -41,7 +36,6 @@ body { overflow: auto; scrollbar-width: thin; scrollbar-color: rgba(15, 23, 42, 
 </head>
 <body><main id="document-root"></main></body>
 </html>`
-}
 
 export function ReportDocumentViewer({ report }: { report?: ReportVersion }) {
   const [expanded, setExpanded] = useState(false)
@@ -59,30 +53,7 @@ export function ReportDocumentViewer({ report }: { report?: ReportVersion }) {
   const isPdf = Boolean(report?.fileName.toLowerCase().endsWith('.pdf'))
   const fileUrl = reportId ? `/api/reports/${reportId}/file` : ''
 
-  // srcDoc 只在挂载时按当前主题生成一次;主题切换后通过 applyDocxFrameTheme 增量更新,避免重载 iframe
-  const [docxFrameSrcDoc] = useState(() => buildDocxFrameDocument(isDarkTheme() ? DOCX_DARK_BACKGROUND : DOCX_LIGHT_BACKGROUND))
-
   const closeExpanded = useCallback(() => setExpanded(false), [])
-
-  const applyDocxFrameTheme = useCallback(() => {
-    const frameDocument = docxFrameRef.current?.contentDocument
-    if (!frameDocument) return
-    const dark = isDarkTheme()
-    frameDocument.documentElement.style.colorScheme = dark ? 'dark' : 'light'
-    const existing = frameDocument.getElementById('yx-docx-theme')
-    existing?.remove()
-    const background = dark ? DOCX_DARK_BACKGROUND : DOCX_LIGHT_BACKGROUND
-    const style = frameDocument.createElement('style')
-    style.id = 'yx-docx-theme'
-    style.textContent = `html, body, .docx-wrapper { background: ${background} !important; }`
-    frameDocument.head.appendChild(style)
-  }, [])
-
-  useEffect(() => {
-    const apply = () => applyDocxFrameTheme()
-    window.addEventListener(YX_THEME_CHANGE_EVENT, apply)
-    return () => window.removeEventListener(YX_THEME_CHANGE_EVENT, apply)
-  }, [applyDocxFrameTheme])
 
   useEffect(() => {
     if (!expanded) return
@@ -205,7 +176,6 @@ export function ReportDocumentViewer({ report }: { report?: ReportVersion }) {
           }
         }
         if (!isCurrentRender()) return
-        applyDocxFrameTheme()
         setLoading(false)
       })
       .catch((loadError: unknown) => {
@@ -283,7 +253,7 @@ export function ReportDocumentViewer({ report }: { report?: ReportVersion }) {
           title={`${report.title} - Word 原文`}
           sandbox="allow-same-origin"
           referrerPolicy="no-referrer"
-          srcDoc={docxFrameSrcDoc}
+          srcDoc={DOCX_FRAME_DOCUMENT}
           onLoad={() => setDocxFrameReady(true)}
           className={`min-h-0 w-full flex-1 border-0 bg-[var(--yx-canvas-inner)] ${!loading && !error ? 'yx-detail-reader' : ''}`}
         />

@@ -31,7 +31,7 @@ export function ProjectExecutiveHeader({
       {/* 课题标题与状态元信息 */}
       <div className="flex flex-col gap-2.5">
         <div className="flex flex-wrap items-center gap-2">
-          <h1 className="min-w-0 max-w-5xl truncate text-2xl font-extrabold tracking-tight text-yx-ink dark:text-yx-ink sm:text-3xl lg:text-4xl">
+          <h1 className="min-w-0 max-w-5xl truncate text-2xl font-extrabold tracking-tight text-yx-ink sm:text-3xl lg:text-4xl">
             {project.title}
           </h1>
           {project.isExample && (

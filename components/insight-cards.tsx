@@ -360,7 +360,7 @@ export function ReportCompletenessCard({ snapshot, analyzing, jobStatus, classNa
 
         </div>
       </div>
-      {scanning ? <div className="yx-completeness-bar shrink-0" /> : <div className="!h-[6px] shrink-0 overflow-hidden rounded-full bg-yx-hover"><div className="h-full rounded-full transition-all duration-500" style={{ width: showScore ? overall + '%' : '0%', backgroundColor: progressColor }} /></div>}
+      {scanning ? <div className="yx-completeness-bar shrink-0" /> : <div className="!h-[6px] shrink-0 overflow-hidden rounded-full bg-yx-hover"><div className="h-full rounded-full transition-[width] duration-500 motion-reduce:transition-none" style={{ width: showScore ? overall + '%' : '0%', backgroundColor: progressColor }} /></div>}
       <div className="mt-1 grid grid-cols-6 gap-1 xl:mt-1">
         {displayMetrics.map((metric) => (
           <div key={metric.id} title={metric.label} className={'flex min-w-0 flex-col items-center gap-0.5 rounded-md py-0.5 transition-colors ' + (showScore ? 'hover:bg-yx-surface' : 'cursor-default')}>

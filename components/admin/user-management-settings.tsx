@@ -9,6 +9,7 @@ import { Field, FormError } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { CustomSelect } from '@/components/ui/select'
 import { apiFetch, fetchAllPages, mutationHeaders } from '@/lib/client-request'
+import { formatBeijingDateTime } from '@/lib/format'
 import type { ManagedUser, SessionUser } from '@/modules/users/domain'
 
 export function UserManagementSettings({
@@ -280,7 +281,7 @@ function UserManagementRow({
   deleteTitle: string
 }) {
   const roleLabel = user.role === 'admin' ? '管理员' : '研究员'
-  const lastLogin = user.lastLoginAt ? user.lastLoginAt.slice(0, 16).replace('T', ' ') : '从未登录'
+  const lastLogin = user.lastLoginAt ? formatBeijingDateTime(user.lastLoginAt) : '从未登录'
   const avatarText = user.displayName.length <= 2 ? user.displayName : user.displayName.slice(-2)
 
   return (
@@ -315,7 +316,7 @@ function UserManagementRow({
             @{user.username}
           </span>
           <span className="shrink-0 text-yx-faint">·</span>
-          <span>最近登录：{lastLogin}</span>
+          <span>最近登录（北京时间）：{lastLogin}</span>
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-1.5">

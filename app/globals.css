@@ -2,9 +2,6 @@
 @import 'tw-animate-css';
 @import './color-tokens.css';
 
-@custom-variant dark (&:is(.dark *));
-
-
 @theme inline {
   --font-sans: 'Geist', 'Geist Fallback';
   --font-mono: 'Geist Mono', 'Geist Mono Fallback';
@@ -139,22 +136,6 @@
   .yx-subtle-scrollbar::-webkit-scrollbar-corner {
     background: transparent;
   }
-
-  .dark .yx-subtle-scrollbar::-webkit-scrollbar-thumb {
-    background-color: rgba(255, 255, 255, 0.2);
-  }
-
-  .dark .yx-subtle-scrollbar::-webkit-scrollbar-thumb:hover {
-    background-color: rgba(255, 255, 255, 0.4);
-  }
-
-  .dark .yx-subtle-scrollbar::-webkit-scrollbar-thumb:active {
-    background-color: rgba(255, 255, 255, 0.6);
-  }
-}
-
-.dark .yx-subtle-scrollbar {
-  scrollbar-color: rgba(255, 255, 255, 0.22) transparent;
 }
 
 .yx-no-scrollbar {
@@ -164,11 +145,6 @@
 
 .yx-no-scrollbar::-webkit-scrollbar {
   display: none;
-}
-
-.dark .yx-dashboard-card {
-  background: oklch(0.2 0 0);
-  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.3);
 }
 
 .yx-progress-ellipsis {
@@ -591,13 +567,6 @@
   color: var(--yx-ink);
 }
 
-.dark .login-page {
-  background:
-    radial-gradient(1300px 900px at 90% 10%, color-mix(in srgb, var(--yx-brand-bright) 28%, transparent), transparent 60%),
-    radial-gradient(900px 700px at 10% 90%, color-mix(in srgb, var(--yx-brand-deep) 70%, transparent), transparent 70%),
-    linear-gradient(145deg, #03140f 0%, var(--yx-brand-deep) 38%, #083427 68%, var(--yx-brand-strong) 100%);
-}
-
 /* =========================================================================
    Full Space Background Ambient Art (Light Matrix)
    ========================================================================= */
@@ -625,10 +594,6 @@
   position: absolute;
   inset: 0;
   background: radial-gradient(circle at 50% 50%, transparent 20%, rgba(247, 246, 243, 0.5) 80%);
-}
-
-.dark .login-hero__radial-mask {
-  background: radial-gradient(circle at 50% 50%, transparent 10%, rgba(4, 22, 17, 0.75) 80%);
 }
 
 .login-hero__glow {
@@ -817,11 +782,6 @@
   mix-blend-mode: multiply;
 }
 
-.dark .login-hero__logo-watermark-img {
-  filter: grayscale(100%) invert(100%);
-  mix-blend-mode: screen;
-}
-
 .login-hero__spine {
   position: absolute;
   top: 50%;
@@ -974,16 +934,6 @@
   animation: login-card-halo-pulse 11s ease-out infinite;
 }
 
-.dark .login-card-halo {
-  box-shadow:
-    0 0 36px color-mix(in srgb, var(--yx-brand-bright) 22%, transparent),
-    0 0 80px color-mix(in srgb, var(--yx-brand) 14%, transparent);
-}
-
-.dark .login-card-halo::after {
-  border-color: color-mix(in srgb, var(--yx-brand-bright) 28%, transparent);
-}
-
 .login-card-motes {
   position: absolute;
   inset: 0;
@@ -1029,16 +979,6 @@
     0 12px 28px -8px rgba(0, 0, 0, 0.04),
     0 0 0 1px rgba(27, 110, 82, 0.04);
   transition: box-shadow 300ms ease, border-color 300ms ease, transform 300ms ease;
-}
-
-.dark .login-card {
-  background: rgba(14, 36, 28, 0.9);
-  backdrop-filter: blur(28px);
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  box-shadow:
-    0 42px 100px -16px rgba(0, 0, 0, 0.78),
-    0 0 0 1px rgba(255, 255, 255, 0.08),
-    inset 0 1px 0 rgba(255, 255, 255, 0.15);
 }
 
 /* 统一底部版权 */
@@ -1684,12 +1624,6 @@
   }
 }
 
-.dark .yx-workspace .yx-dashboard-card {
-  border: 1px solid var(--yx-line);
-  background: var(--yx-paper);
-  box-shadow: none;
-}
-
 body {
   background: var(--background);
   color: var(--foreground);
@@ -1716,7 +1650,7 @@ body {
    Overview enter / chart / skeleton motion
    Animates only under .yx-overview[data-enter="true"]. Default: visible.
    No transforms on the overview root. Opacity + transform only (no filter /
-   box-shadow animation). Dark theme reuses --yx-hover / existing tokens.
+   box-shadow animation).
    ========================================================================= */
 
 .yx-overview {
@@ -2051,6 +1985,31 @@ body {
 
 .yx-detail[data-enter="true"] .yx-detail-fade {
   animation: yx-detail-fade 280ms var(--detail-ease) var(--detail-delay-fade) both;
+}
+
+.yx-insight-wait-dots {
+  display: inline-flex;
+  width: 1.2em;
+}
+
+.yx-insight-wait-dots > span {
+  flex: 1;
+  animation: yx-insight-wait-dot 1.2s ease-in-out infinite;
+}
+
+.yx-insight-wait-dots > span:nth-child(2) { animation-delay: 160ms; }
+.yx-insight-wait-dots > span:nth-child(3) { animation-delay: 320ms; }
+
+@keyframes yx-insight-wait-dot {
+  0%, 80%, 100% { opacity: 0.3; }
+  40% { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .yx-insight-wait-dots > span {
+    animation: none;
+    opacity: 1;
+  }
 }
 
 .yx-detail[data-enter="true"] .yx-detail-still-loading {

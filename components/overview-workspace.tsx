@@ -915,7 +915,7 @@ function ScoreGauge({ value, empty }: { value: number; empty?: boolean }) {
             : 'from-yx-paper to-yx-brand-soft ring-yx-brand-tint/70'
       }`}>
         <span
-          className={`text-[29px] font-bold leading-none tracking-[-0.05em] tabular-nums ${
+          className={`px-1 text-[29px] font-bold leading-none tracking-[-0.05em] tabular-nums ${
             empty
               ? 'text-yx-faint'
               : value < 60

@@ -11,12 +11,11 @@ import {
   type VisualizationView,
 } from '@/components/research-visualization-card'
 import { applyFullscreenScrollLock } from '@/lib/workspace-scroll'
+import { getReportStageLabel } from '@/lib/report-stage'
 import type { AnalysisJob } from '@/modules/analysis/domain'
 import type { AnalysisModuleState, AnalysisSnapshotPayload } from '@/modules/contracts/analysis'
 import type { ProjectWithCapabilities } from '@/modules/projects/domain'
 import type { ReportVersion } from '@/modules/reports/domain'
-
-const REPORT_STAGE_LABELS = ['阶段一', '阶段二', '阶段三', '阶段四', '阶段五', '阶段六', '阶段七', '阶段八', '阶段九', '阶段十', '阶段十一', '阶段十二'] as const
 
 export function DashboardView({
   project,
@@ -107,8 +106,7 @@ export function DashboardView({
   }
 
   const reportMilestone = project?.milestones.find((milestone) => milestone.id === report.milestoneId)
-  const reportStageIndex = project?.milestones.findIndex((milestone) => milestone.id === report.milestoneId) ?? -1
-  const reportStageLabel = reportStageIndex >= 0 ? REPORT_STAGE_LABELS[reportStageIndex] : '未分配'
+  const reportStageLabel = getReportStageLabel(report, project?.milestones)
 
   return (
     <div {...entranceProps} className="yx-detail flex min-h-0 min-w-0 flex-col gap-3 sm:gap-4 lg:min-h-0 lg:flex-1">

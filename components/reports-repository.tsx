@@ -11,6 +11,7 @@ import { CustomSelect } from '@/components/ui/select'
 import { fetchAllPages } from '@/lib/client-request'
 import { formatReportCharacters, formatReportDate, scoreTextClass } from '@/lib/format'
 import { cumulativeTrend, runningAverageValues } from '@/lib/overview-trends'
+import { getReportStageLabel } from '@/lib/report-stage'
 import type { ProjectWithCapabilities } from '@/modules/projects/domain'
 import type { ReportVersion } from '@/modules/reports/domain'
 import type { ReportWithProject } from '@/components/workspace-types'
@@ -78,7 +79,7 @@ export function ReportsRepositoryWorkspace({
       label: p.title,
       textLabel: p.title,
       icon: FolderKanban,
-      badge: p.latestReport ? `阶段${p.latestReport.version}` : undefined,
+      badge: p.latestReport ? `V${p.latestReport.version}` : undefined,
       badgeTone: 'gray' as const,
     })),
   ], [projects])
@@ -312,7 +313,7 @@ export function ReportsRepositoryWorkspace({
                               <td className="px-4 py-3">
                                 <CellCaption label="阶段">
                                   <span className="rounded-full bg-yx-warning-soft px-2 py-0.5 text-[10px] font-semibold text-yx-warning-text">
-                                    阶段{report.version}
+                                    {getReportStageLabel(report, project?.milestones)}
                                   </span>
                                 </CellCaption>
                               </td>

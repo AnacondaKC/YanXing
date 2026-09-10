@@ -293,7 +293,7 @@ function ReportStat({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex h-[32px] min-w-0 items-center justify-between gap-1 rounded-md px-2 bg-yx-surface border-transparent">
       <span className="shrink-0 text-[9px] sm:text-[10px] text-yx-muted font-medium">{label}</span>
-      <span className="truncate text-right text-[11px] font-bold sm:text-xs tabular-nums text-yx-ink">{value}</span>
+      <span className="truncate text-right text-[11px] font-bold sm:text-xs tabular-nums text-yx-ink" title={value}>{value}</span>
     </div>
   )
 }

@@ -5,13 +5,14 @@
  * 1. 先定角色，再填色值。页面只允许用这些角色，不允许再写一套「看起来差不多的绿」。
  * 2. 中性色用暖灰纸感（墨、米、线），提醒用琥珀黄，主色只用一种沉稳绿。
  * 3. 绿色降低饱和、略加深，避免 Tailwind emerald-500 那种偏青的亮翠绿。
- * 4. 深色模式沿用同一套角色，只换明暗，不再切到蓝黑或把彩色抹成灰。
- * 5. 组件用 bg-yx-brand / text-yx-ink / var(--yx-brand) ；新增颜色先加 token。
+ * 4. 组件用 bg-yx-brand / text-yx-ink / var(--yx-brand) ；新增颜色先加 token。
  *
  * 主色 #1b6e52：同属绿色，比 #10b981 更深、更稳，白字按钮对比度足够。
  */
 
 :root {
+  color-scheme: only light;
+
   /* 圆角三层级（全局唯一定义点）：
      控件 rounded-md = calc(var(--radius) - 2px) = 4px
      卡片 rounded-lg = var(--radius)             = 6px
@@ -141,64 +142,6 @@
   --color-red-500: var(--yx-danger);
   --color-red-600: #d94646;
   --color-red-700: var(--yx-danger-text);
-}
-
-.dark {
-  --yx-ink: #f2f2ef;
-  --yx-ink-soft: #d5d3cd;
-  --yx-muted: #b4b2ad;
-  --yx-faint: #8a8883;
-  --yx-line: rgba(242, 242, 239, 0.14);
-  --yx-hover: #33312d;
-  --yx-surface: #1f1e1b;
-  --yx-paper: #292825;
-  --yx-bg: #1f1e1b;
-  --yx-canvas: #292825;
-  --yx-canvas-inner: #24231f;
-
-  --yx-brand-deep: #0d2a22;
-  --yx-brand-strong: #1a4d3c;
-  --yx-brand-hover: #5bab86;
-  --yx-brand: #3d8f6e;
-  --yx-brand-bright: #7fb89a;
-  --yx-brand-tint: #1e3d32;
-  --yx-brand-soft: rgba(61, 143, 110, 0.16);
-  --yx-brand-foreground: #f7faf8;
-
-  --yx-warning: #eabc35;
-  --yx-warning-soft: rgba(234, 188, 53, 0.16);
-  --yx-warning-text: #f0cf6e;
-  --yx-danger: #f08080;
-  --yx-danger-soft: rgba(240, 128, 128, 0.16);
-  --yx-danger-text: #f5aaaa;
-
-  --background: var(--yx-bg);
-  --foreground: var(--yx-ink);
-  --card: var(--yx-paper);
-  --card-foreground: var(--yx-ink);
-  --popover: var(--yx-paper);
-  --popover-foreground: var(--yx-ink);
-  --primary: var(--yx-brand);
-  --primary-foreground: var(--yx-brand-foreground);
-  --secondary: var(--yx-hover);
-  --secondary-foreground: var(--yx-ink);
-  --muted: var(--yx-paper);
-  --muted-foreground: var(--yx-muted);
-  --accent: var(--yx-brand-soft);
-  --accent-foreground: var(--yx-brand-bright);
-  --destructive: var(--yx-danger);
-  --destructive-foreground: var(--yx-ink);
-  --border: var(--yx-line);
-  --input: rgba(242, 242, 239, 0.18);
-  --ring: var(--yx-brand);
-  --sidebar: var(--yx-paper);
-  --sidebar-foreground: var(--yx-ink);
-  --sidebar-primary: var(--yx-brand);
-  --sidebar-primary-foreground: var(--yx-brand-foreground);
-  --sidebar-accent: var(--yx-hover);
-  --sidebar-accent-foreground: var(--yx-ink);
-  --sidebar-border: var(--yx-line);
-  --sidebar-ring: var(--yx-brand);
 }
 
 @theme inline {

@@ -7,7 +7,6 @@ import { NotificationCenter } from '@/components/notification-center'
 import { Dialog, DialogBody, DialogFooter, DialogHeader } from '@/components/ui/dialog'
 import { Field, FormError } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
-import { ThemeToggle } from '@/components/theme-toggle'
 import { apiFetch, mutationHeaders } from '@/lib/client-request'
 import type { SessionUser } from '@/modules/users/domain'
 
@@ -67,7 +66,6 @@ export function TopbarUserNav({
           <Settings className="h-4 w-4" />
         </Button>
       ) : null}
-      <ThemeToggle />
       <div className="mx-0.5 h-4 w-px bg-black/[0.1] sm:mx-1" />
       <div ref={containerRef} className="relative">
         <button

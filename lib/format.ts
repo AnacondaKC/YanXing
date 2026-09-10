@@ -26,6 +26,23 @@ export function formatDate(value: string | undefined) {
   return value.slice(5, 10).replace('-', '/')
 }
 
+const beijingDateTimeFormatter = new Intl.DateTimeFormat('zh-CN', {
+  timeZone: 'Asia/Shanghai',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+})
+
+export function formatBeijingDateTime(value: string | undefined): string {
+  if (!value) return '--'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '--'
+  return beijingDateTimeFormatter.format(date).replaceAll('/', '-')
+}
+
 export function formatRelativeTime(value: string) {
   const time = new Date(value).getTime()
   if (Number.isNaN(time)) return '--'
