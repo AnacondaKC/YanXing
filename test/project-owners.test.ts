@@ -121,7 +121,17 @@ test('submitted reports cannot change stage; analyze no longer requires a patch'
   assert.equal(assigned.status, 409)
   assert.equal(((await assigned.json()) as { code?: string }).code, 'REPORT_STAGE_IMMUTABLE')
   const started = await analyzeReport(new Request('http://localhost/api/reports/' + submitted.reportId + '/analyze', { method: 'POST', headers }), { params: Promise.resolve({ reportId: submitted.reportId }) })
-  assert.ok(started.status === 202 || started.status === 200)
+  assert.equal(started.status, 202)
+  const admitted = await started.json()
+  assert.equal(admitted.reused, false)
+  assert.equal(admitted.job.reportId, submitted.reportId)
+  assert.equal(admitted.job.status, 'queued')
+  const replay = await analyzeReport(new Request('http://localhost/api/reports/' + submitted.reportId + '/analyze', { method: 'POST', headers }), { params: Promise.resolve({ reportId: submitted.reportId }) })
+  assert.equal(replay.status, 200)
+  const reused = await replay.json()
+  assert.equal(reused.reused, true)
+  assert.equal(reused.job.id, admitted.job.id)
+  assert.equal(Number(getDatabase().prepare('SELECT COUNT(*) AS count FROM submission_tasks WHERE report_id = ?').get(submitted.reportId)?.count), 1)
 })
 
 test('legacy multipart report upload is retired in favor of report-uploads', async () => {

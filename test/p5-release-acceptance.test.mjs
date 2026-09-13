@@ -17,18 +17,8 @@ import {
   assertSuccessfulWorkerOutcome,
   buildIsolatedProcessEnv,
   closeProviderFixture,
-  buildNativeBackupCliArgs,
-  classifyNativeBackupFailure,
   collectSecretValues,
   createIsolatedWorkspace,
-  inspectIsolatedQuiescence,
-  parseBackupCliJson,
-  preserveRuntimeRootAside,
-  readPublishedRestoreProbe,
-  resolveBackupCli,
-  restoreIncompleteMarkerPath,
-  summarizeTaskProbe,
-  assertTaskProbePreserved,
   createSuccessDocuments,
   isPidAlive,
   parseArgs,
@@ -49,6 +39,18 @@ import {
   validReleaseAnalysisPayload,
   validReleaseInsightHtml,
 } from '../scripts/p5-release-acceptance.mjs'
+import {
+  assertTaskProbePreserved,
+  buildNativeBackupCliArgs,
+  classifyNativeBackupFailure,
+  inspectIsolatedQuiescence,
+  parseBackupCliJson,
+  preserveRuntimeRootAside,
+  readPublishedRestoreProbe,
+  resolveBackupCli,
+  restoreIncompleteMarkerPath,
+  summarizeTaskProbe,
+} from '../scripts/p5-backup-restore.mjs'
 
 const scriptPath = fileURLToPath(new URL('../scripts/p5-release-acceptance.mjs', import.meta.url))
 

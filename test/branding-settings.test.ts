@@ -26,6 +26,21 @@ const publicRoute = await import('../app/api/branding/route')
 const assetRoute = await import('../app/api/branding/assets/[kind]/route')
 const adminRoute = await import('../app/api/admin/branding/route')
 const database = getDatabase()
+const initialBrandSettings = database.prepare(`
+  SELECT display_text, header_logo, header_logo_mime, login_watermark, login_watermark_mime,
+         revision, updated_at, updated_by
+  FROM brand_settings
+  WHERE id = 1
+`).get() as {
+  display_text: string
+  header_logo: Uint8Array | null
+  header_logo_mime: string | null
+  login_watermark: Uint8Array | null
+  login_watermark_mime: string | null
+  revision: number
+  updated_at: string | null
+  updated_by: string | null
+}
 const timestamp = new Date().toISOString()
 for (const [id, role] of [['brand-admin', 'admin'], ['brand-researcher', 'researcher']]) {
   database.prepare('INSERT INTO users(id, username, display_name, password_hash, role, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
@@ -37,6 +52,33 @@ const onePixelPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAA
 
 test.after(async () => {
   await rm(directory, { recursive: true, force: true })
+})
+
+test.beforeEach(() => {
+  database.prepare(`
+    INSERT INTO brand_settings(
+      id, display_text, header_logo, header_logo_mime, login_watermark, login_watermark_mime,
+      revision, updated_at, updated_by
+    ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      display_text = excluded.display_text,
+      header_logo = excluded.header_logo,
+      header_logo_mime = excluded.header_logo_mime,
+      login_watermark = excluded.login_watermark,
+      login_watermark_mime = excluded.login_watermark_mime,
+      revision = excluded.revision,
+      updated_at = excluded.updated_at,
+      updated_by = excluded.updated_by
+  `).run(
+    initialBrandSettings.display_text,
+    initialBrandSettings.header_logo,
+    initialBrandSettings.header_logo_mime,
+    initialBrandSettings.login_watermark,
+    initialBrandSettings.login_watermark_mime,
+    initialBrandSettings.revision,
+    initialBrandSettings.updated_at,
+    initialBrandSettings.updated_by,
+  )
 })
 
 function adminRequest(input: { body?: unknown; token?: string; headers?: Record<string, string> } = {}) {

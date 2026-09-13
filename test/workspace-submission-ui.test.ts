@@ -4,14 +4,13 @@ import test from 'node:test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { readFileSync } from 'node:fs'
-import { defaultSelection, stageGroup } from '../modules/reports/workspace-query'
+import { defaultSelection, stageGroup, stageGroupLabel } from '../modules/reports/workspace-query'
 import type { AiScore } from '../modules/contracts/analysis'
 import type { ProjectWorkflow, ProjectStageRecord } from '../modules/projects/stage-domain'
 import type { SubmissionComparison } from '../modules/reports/submission-query'
 import {
   allowedReportKinds,
   analysisActionLabel,
-  beginSubmitCommit,
   beginSubmitConfirm,
   buildSubmissionCommand,
   characterDeltaFromComparison,
@@ -22,7 +21,6 @@ import {
   comparisonIsHidden,
   createIdempotencyKey,
   currentStageTokens,
-  formatStageLabel,
   hasCompletedFullAnalysis,
   idleSubmitPhase,
   isCurrentWorkspaceFetch,
@@ -112,9 +110,9 @@ function workflowFor(stages: WorkspaceStageGroup[], completed = false): ProjectW
 }
 
 test('stage labels pad ordinals and keep names separate from version numbers', () => {
-  assert.equal(formatStageLabel({ ordinal: 1, title: '开题研究' }), '阶段01 · 开题研究')
-  assert.equal(formatStageLabel({ ordinal: 12, title: '成果形成' }), '阶段12 · 成果形成')
-  assert.equal(formatStageLabel({ ordinal: 3, title: '  ' }), '阶段03')
+  assert.equal(stageGroupLabel({ ordinal: 1, title: '开题研究' }), '阶段01 · 开题研究')
+  assert.equal(stageGroupLabel({ ordinal: 12, title: '成果形成' }), '阶段12 · 成果形成')
+  assert.equal(stageGroupLabel({ ordinal: 3, title: '  ' }), '阶段03')
 })
 
 test('stage groups stay in plan ordinal and reports sort by stage version descending', () => {
@@ -404,7 +402,9 @@ test('two-step submit flow keeps prepare separate from confirmation and preserve
     reportKind: 'completion',
     tokens: { planRevision: 0, workflowRevision: 0, completionRevision: 0, completionReportId: null },
   })
-  const submitting = beginSubmitCommit({ phase: prepared, command, idempotencyKey: 'submit_key_12345678' })
+  const submitting = reduceWorkspaceSubmit(prepared, { type: 'commit_started', command, idempotencyKey: 'submit_key_12345678' })
+  assert.equal(submitting.step, 'submitting')
+  if (submitting.step !== 'submitting') throw new Error('expected submitting')
   const conflict = reduceWorkspaceSubmit(submitting, {
     type: 'commit_conflict',
     conflict: { code: 'STAGE_COMPLETION_CHANGED', error: '阶段完结报告已变化，请重新确认。' },
@@ -544,9 +544,9 @@ test('submission tokens use current completion rather than latest submission', (
 test('live workspace entry is native and does not reintroduce replacement or reassignment', () => {
   const page = readFileSync(new URL('../app/page.tsx', import.meta.url), 'utf8')
   const app = readFileSync(new URL('../components/workspace-app.tsx', import.meta.url), 'utf8')
-  assert.match(page, /Dashboard/)
-  const dashboard = readFileSync(new URL('../components/dashboard.tsx', import.meta.url), 'utf8')
-  assert.match(dashboard, /export \{ default \} from '@\/components\/workspace-app'/)
+  assert.match(page, /from '@\/components\/workspace-app'/)
+  assert.match(page, /<WorkspaceApp \/>/)
+  assert.doesNotMatch(page, /from '@\/components\/dashboard'/)
   assert.doesNotMatch(app, /ReplaceReportDialog|ReportStageAssignmentDialog|onNeedStageAssignment|deliveryType/)
   assert.doesNotMatch(app, /ReportVersion/)
   assert.match(app, /urlHydrated/)
@@ -654,7 +654,9 @@ test('conflict without fresh tokens cannot commit and does not fall back to old 
     uploadId: prepared.upload.id, stageId: 's1', reportKind: 'completion',
     tokens: { planRevision: 0, workflowRevision: 0, completionRevision: 0, completionReportId: null },
   })
-  const submitting = beginSubmitCommit({ phase: prepared, command, idempotencyKey: 'submit_key_12345678' })
+  const submitting = reduceWorkspaceSubmit(prepared, { type: 'commit_started', command, idempotencyKey: 'submit_key_12345678' })
+  assert.equal(submitting.step, 'submitting')
+  if (submitting.step !== 'submitting') throw new Error('expected submitting')
   const stale = reduceWorkspaceSubmit(submitting, {
     type: 'commit_conflict',
     conflict: { code: 'STAGE_COMPLETION_CHANGED', error: '阶段完结报告已变化。' },
@@ -700,8 +702,8 @@ test('close and reopen preserve uncertain submission identity and guard success 
     impact: { autoCompletedStages: [], projectWillComplete: false, targetAlreadyCompleted: false },
   }, { type: 'prepare_succeeded', upload: upload })
   assert.ok(prepared.step === 'prepared')
-  const submitting = beginSubmitCommit({
-    phase: prepared,
+  const submitting = reduceWorkspaceSubmit(prepared, {
+    type: 'commit_started',
     command: buildSubmissionCommand({
       uploadId: upload.id,
       stageId: 's1',
@@ -710,6 +712,8 @@ test('close and reopen preserve uncertain submission identity and guard success 
     }),
     idempotencyKey: 'submit_key_keep',
   })
+  assert.equal(submitting.step, 'submitting')
+  if (submitting.step !== 'submitting') throw new Error('expected submitting')
   const uncertain = reduceWorkspaceSubmit(submitting, { type: 'commit_uncertain', error: '提交结果未确认。将使用相同幂等键重试，不会重新解析文件。' })
   assert.equal(uncertain.step, 'uncertain')
   if (uncertain.step !== 'uncertain') throw new Error('expected uncertain')
@@ -919,8 +923,12 @@ function pendingSubmission() {
     impact: { autoCompletedStages: [], projectWillComplete: false, targetAlreadyCompleted: false },
   }, { type: 'prepare_succeeded', upload: { id: 'upload_1', projectId: 'project-1', status: 'ready', fileName: file.name, createdAt: '2026-03-02T00:00:00Z', expiresAt: '2026-03-02T01:00:00Z' } })
   assert.ok(phase.step === 'prepared')
+  if (phase.step !== 'prepared') throw new Error('expected prepared')
   const command = buildSubmissionCommand({ uploadId: phase.upload.id, stageId: 's1', reportKind: 'completion', tokens: { planRevision: 0, workflowRevision: 0, completionRevision: 0, completionReportId: null } })
-  return beginSubmitCommit({ phase, command, idempotencyKey: 'original_key_12345678' })
+  const submitting = reduceWorkspaceSubmit(phase, { type: 'commit_started', command, idempotencyKey: 'original_key_12345678' })
+  assert.equal(submitting.step, 'submitting')
+  if (submitting.step !== 'submitting') throw new Error('expected submitting')
+  return submitting
 }
 
 for (const code of ['UPLOAD_EXPIRED', 'UPLOAD_NOT_READY', 'REPORT_FILE_CHANGED', 'INVALID_SUBMISSION']) {
@@ -1026,18 +1034,11 @@ test('whole stale detail cannot regress generation, terminal, cancellation, capa
   assert.equal(applyWorkspaceInsightTask(next, insight).analysisTask, nextTask)
 })
 
-function deferred<T>() {
-  let resolve!: (value: T) => void
-  let reject!: (cause: unknown) => void
-  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no })
-  return { promise, resolve, reject }
-}
-
 test('report reader coalesces SSE and poll, fences mutations, and reads pending notifications once', async () => {
-  const requests: Array<ReturnType<typeof deferred<number>>> = []
+  const requests: Array<ReturnType<typeof Promise.withResolvers<number>>> = []
   const applied: number[] = []
   const reader = createWorkspaceReportReader({
-    fetch: async () => { const request = deferred<number>(); requests.push(request); return request.promise },
+    fetch: async () => { const request = Promise.withResolvers<number>(); requests.push(request); return request.promise },
     apply: (_identity, value) => { applied.push(value) }, error: () => assert.fail('unexpected error'),
   })
   const identity = { reportId: 'r1', generation: 1 }
@@ -1057,11 +1058,11 @@ test('report reader coalesces SSE and poll, fences mutations, and reads pending 
 })
 
 test('out-of-order report reads and aborted navigation cannot overwrite the current selection', async () => {
-  const requests = new Map<string, ReturnType<typeof deferred<number>>>()
+  const requests = new Map<string, ReturnType<typeof Promise.withResolvers<number>>>()
   const applied: number[] = []
   let selected = 'r1'
   const reader = createWorkspaceReportReader({
-    fetch: async (id) => { const request = deferred<number>(); requests.set(id, request); return request.promise },
+    fetch: async (id) => { const request = Promise.withResolvers<number>(); requests.set(id, request); return request.promise },
     apply: (identity, value) => { if (identity.reportId === selected) applied.push(value) }, error: () => assert.fail('unexpected error'),
   })
   const first = reader.read({ reportId: 'r1', generation: 1 })

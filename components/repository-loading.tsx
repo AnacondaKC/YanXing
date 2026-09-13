@@ -1,4 +1,4 @@
-export type RepositoryDataState = 'loading' | 'ready' | 'error'
+export type { OverviewLoadState as RepositoryDataState } from '@/lib/overview-loading'
 
 export function RepositoryLoading({ label }: { label: string }) {
   return (

@@ -2,6 +2,7 @@
 
 import { AlertCircle, BookOpen, Check, CheckCircle2, ChevronDown, CircleDashed, KeyRound, Layers3, Loader2, Network, Pencil, Plus, Save, Server, Sparkles, Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useLatestRequest } from '@/components/use-latest-request'
 import { Field } from '@/components/ui/field'
 import { IconBadge } from '@/components/ui/icon-badge'
 import { CustomSelect } from '@/components/ui/select'
@@ -36,40 +37,32 @@ export function AdminModelSettings({
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
-  const loadSequenceRef = useRef(0)
-  const loadControllerRef = useRef<AbortController | undefined>(undefined)
   const onChannelsCountChangeRef = useRef(onChannelsCountChange)
   onChannelsCountChangeRef.current = onChannelsCountChange
+  const { begin, invalidate } = useLatestRequest()
 
   const reload = useCallback(async () => {
-    const requestSequence = ++loadSequenceRef.current
-    loadControllerRef.current?.abort()
-    const controller = new AbortController()
-    loadControllerRef.current = controller
+    const request = begin()
     setLoading(true)
     try {
-      const response = await apiFetch('/api/admin/ai-settings', { cache: 'no-store', signal: controller.signal }).catch(() => null)
+      const response = await apiFetch('/api/admin/ai-settings', { cache: 'no-store', signal: request.signal }).catch(() => null)
       const body = (await response?.json().catch(() => null)) as { settings?: AiModelSettings; error?: string } | null
-      if (controller.signal.aborted || requestSequence !== loadSequenceRef.current) return
+      if (!request.isCurrent()) return
       if (!response?.ok || !body?.settings) throw new Error(body?.error ?? '设置读取失败。')
       setSettings(body.settings)
       onChannelsCountChangeRef.current?.(body.settings.channels.length)
       setError('')
     } catch (reason) {
-      if (controller.signal.aborted || requestSequence !== loadSequenceRef.current) return
+      if (!request.isCurrent()) return
       setError(reason instanceof Error ? reason.message : '设置读取失败。')
     } finally {
-      if (loadControllerRef.current === controller) loadControllerRef.current = undefined
-      if (!controller.signal.aborted && requestSequence === loadSequenceRef.current) setLoading(false)
+      request.end()
+      if (request.isCurrent()) setLoading(false)
     }
-  }, [])
+  }, [begin])
 
   useEffect(() => {
     void reload()
-    return () => {
-      loadSequenceRef.current += 1
-      loadControllerRef.current?.abort()
-    }
   }, [reload])
 
   if (loading)
@@ -91,8 +84,7 @@ export function AdminModelSettings({
   }
 
   function applySavedSettings(newSettings: AiModelSettings) {
-    loadSequenceRef.current += 1
-    loadControllerRef.current?.abort()
+    invalidate()
     setSettings(newSettings)
     onChannelsCountChangeRef.current?.(newSettings.channels.length)
   }

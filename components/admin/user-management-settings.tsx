@@ -2,6 +2,7 @@
 
 import { AlertCircle, Loader2, Pencil, Search, Trash2, UserPlus, Users } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useLatestRequest } from '@/components/use-latest-request'
 import { Button } from '@/components/ui/button'
 import { IconBadge } from '@/components/ui/icon-badge'
 import { Dialog, DialogBody, DialogFooter, DialogHeader } from '@/components/ui/dialog'
@@ -28,38 +29,30 @@ export function UserManagementSettings({
   const [deletingUserId, setDeletingUserId] = useState<string | undefined>(undefined)
   const [searchQuery, setSearchQuery] = useState('')
   const [roleFilter, setRoleFilter] = useState<'all' | 'admin' | 'researcher' | 'disabled'>('all')
-  const loadSequenceRef = useRef(0)
-  const loadControllerRef = useRef<AbortController | undefined>(undefined)
   const onUsersCountChangeRef = useRef(onUsersCountChange)
   onUsersCountChangeRef.current = onUsersCountChange
+  const { begin } = useLatestRequest()
 
   const reload = useCallback(async () => {
-    const requestSequence = ++loadSequenceRef.current
-    loadControllerRef.current?.abort()
-    const controller = new AbortController()
-    loadControllerRef.current = controller
+    const request = begin()
     setLoading(true)
     try {
-      const result = await fetchAllPages<ManagedUser>('/api/admin/users', 'users', { cache: 'no-store', signal: controller.signal })
-      if (controller.signal.aborted || requestSequence !== loadSequenceRef.current) return
+      const result = await fetchAllPages<ManagedUser>('/api/admin/users', 'users', { cache: 'no-store', signal: request.signal })
+      if (!request.isCurrent()) return
       setUsers(result.items)
       onUsersCountChangeRef.current?.(result.total)
       setError('')
     } catch (reason) {
-      if (controller.signal.aborted || requestSequence !== loadSequenceRef.current) return
+      if (!request.isCurrent()) return
       setError(reason instanceof Error ? reason.message : '用户列表读取失败。')
     } finally {
-      if (loadControllerRef.current === controller) loadControllerRef.current = undefined
-      if (!controller.signal.aborted && requestSequence === loadSequenceRef.current) setLoading(false)
+      request.end()
+      if (request.isCurrent()) setLoading(false)
     }
-  }, [])
+  }, [begin])
 
   useEffect(() => {
     void reload()
-    return () => {
-      loadSequenceRef.current += 1
-      loadControllerRef.current?.abort()
-    }
   }, [reload])
 
   function handleSaved(user: ManagedUser, created: boolean) {

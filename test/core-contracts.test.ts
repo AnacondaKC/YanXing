@@ -57,6 +57,7 @@ import {
 import { retryDelay } from '../modules/analysis/pipeline'
 import { buildVisualizationWordCloudItems, completeWordCloudOutput } from '../modules/analysis/word-cloud'
 import { pageAnalysisModule } from '../modules/analysis/modules'
+import { buildPageAnalysisTaskPrompt } from '../modules/analysis/prompt'
 import { getDefaultAiPromptConfig } from '../lib/ai/prompt-defaults'
 import { buildAnalysisProgress } from '../modules/analysis/progress'
 import type { AnalysisJob } from '../modules/analysis/domain'
@@ -952,37 +953,25 @@ test('page_analysis is the single analysis module with the four-stage pipeline',
 })
 
 test('page_analysis prompt includes frozen context and retry errors only', () => {
-  const context = {
-    jobId: 'job-prompt-test',
-    reportVersionId: 'report-1',
-    reportFacts: createReportFacts(),
-    reportSource: {
-      path: '/tmp/test.pdf',
-      fileName: 'test.pdf',
-      mimeType: 'application/pdf',
-      size: 100,
-      sha256: 'prompt-test-hash',
-    },
-    evaluationContext: {
-      projectId: 'project-1',
-      projectTitle: '测试课题',
-      researchObjective: '测试研究目标',
-      researchBackground: '测试研究背景',
-      milestone: { id: 'stage-1', title: '阶段一', targetDate: '2026-12-31', workAndExpectedOutcomes: '完成测试成果' },
-    },
-    maxContextCharacters: 100_000,
-    promptConfig: getDefaultAiPromptConfig('page_analysis'),
-    attempt: 1,
-    previousErrors: [],
+  const evaluationContext = {
+    projectId: 'project-1',
+    projectTitle: '测试课题',
+    researchObjective: '测试研究目标',
+    researchBackground: '测试研究背景',
+    milestone: { id: 'stage-1', title: '阶段一', targetDate: '2026-12-31', workAndExpectedOutcomes: '完成测试成果' },
   }
-  const prompt = pageAnalysisModule.buildPrompt(context)
+  const promptInput = {
+    instructionPrompt: getDefaultAiPromptConfig('page_analysis').instructionPrompt,
+    reportFacts: createReportFacts(),
+    evaluationContext,
+  }
+  const prompt = buildPageAnalysisTaskPrompt(promptInput)
   assert.match(prompt, /课题与阶段评价基准.*测试研究目标/)
   assert.match(prompt, /报告本地事实.*paragraphCount.*characterCount/)
   assert.match(prompt, /固定中文键/)
   assert.doesNotMatch(prompt, /sourceRefs|rationale|完整度 [0-9]|权重分数/)
-  const retryPrompt = pageAnalysisModule.buildPrompt({
-    ...context,
-    attempt: 2,
+  const retryPrompt = buildPageAnalysisTaskPrompt({
+    ...promptInput,
     previousErrors: [{ code: 'SCHEMA_INVALID', path: '/词云', message: '词云无效。' }],
   })
   assert.match(retryPrompt, /修正以下门禁错误.*SCHEMA_INVALID/)
@@ -1139,20 +1128,27 @@ test('heatmap chapter titles must exactly match report detail titles', () => {
   }))
   assert.equal(duplicated.errors.some((error) => error.code === 'DUPLICATE_HEATMAP_ROW'), true)
 
-  const tooManyRows = createPageAnalysis({
-    '热力图': Array.from({ length: 13 }, (_, index) => ({
-      '章节': index === 0 ? '正文' : `章节${index + 1}`,
-      '文献综述': 100,
-      '定性分析': 55,
-      '定量建模': 30,
-      '案例研究': 0,
-      '实地调研': 0,
-      '对比分析': 45,
-    })),
-  })
-  assert.equal(tooManyRows['热力图'].length, 13)
-  assert.equal(validatePageAnalysis(tooManyRows).accepted, false)
 })
+
+for (const { rows, accepted, expected } of [
+  { rows: 0, accepted: false, expected: '1' },
+  { rows: 1, accepted: true },
+  { rows: 12, accepted: true },
+  { rows: 13, accepted: false, expected: '12' },
+]) {
+  test('heatmap row boundary: ' + rows + ' rows with matching report chapters', () => {
+    const sections = createPageSections(Math.max(1, rows))
+    const result = validatePageAnalysis(createPageAnalysis({
+      '报告详情': { '章节': sections, '完整度结论': '整体完整度良好' },
+      '热力图': sections.slice(0, rows).map((section) => ({
+        ...createPageAnalysis()['热力图'][0], '章节': section['标题'],
+      })),
+    }))
+    assert.equal(result.accepted, accepted)
+    assert.deepEqual(result.errors.map(({ code, path, expected }) => ({ code, path, expected })),
+      accepted ? [] : [{ code: 'SCHEMA_INVALID', path: '/热力图', expected }])
+  })
+}
 
 test('word cloud accepts 50-60 unique keywords and rejects boundaries', () => {
   assert.equal(validatePageAnalysis(createPageAnalysis({ '词云': createWordCloudWords(49) })).accepted, false)

@@ -1,5 +1,5 @@
 import {createJobEventStream} from '@/lib/http/submission-task-events'
-import type { AuthUser } from '@/lib/auth/session'
+import type { SessionUser as AuthUser } from '@/modules/users/domain'
 import { jsonBodyFailureResponse } from '@/lib/http/json-body-response'
 import { parsePagination, paginationRangeFailure } from '@/lib/http/pagination'
 import { logUnexpectedError } from '@/lib/http/public-error'

@@ -2,6 +2,7 @@
 
 import { Bell, CheckCheck, Loader2, RefreshCw } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useLatestRequest } from '@/components/use-latest-request'
 import { apiFetch, mutationHeaders } from '@/lib/client-request'
 import { notificationActions, type NotificationAction, type NotificationItem } from '@/modules/notifications/domain'
 import type { SessionUser } from '@/modules/users/domain'
@@ -46,30 +47,21 @@ export function NotificationCenter({ user, refreshKey = 0 }: { user: SessionUser
   const buttonRef = useRef<HTMLButtonElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
   const refreshKeyRef = useRef(refreshKey)
-  const loadSequenceRef = useRef(0)
-  const loadControllerRef = useRef<AbortController | undefined>(undefined)
   const pendingWritesRef = useRef(0)
   const userId = user.id
   const isAdmin = user.role === 'admin'
+  const { begin } = useLatestRequest()
 
   const loadNotifications = useCallback(async ({ signal, showLoading = false }: LoadOptions = {}) => {
-    const requestSequence = ++loadSequenceRef.current
-    loadControllerRef.current?.abort()
-    const controller = new AbortController()
-    loadControllerRef.current = controller
-    if (signal) {
-      const abort = () => controller.abort()
-      if (signal.aborted) abort()
-      else signal.addEventListener('abort', abort, { once: true })
-    }
+    const request = begin(signal)
     if (showLoading) setLoading(true)
     try {
-      const response = await apiFetch('/api/notifications?limit=' + NOTIFICATION_PAGE_SIZE + '&offset=0', { cache: 'no-store', signal: controller.signal })
+      const response = await apiFetch('/api/notifications?limit=' + NOTIFICATION_PAGE_SIZE + '&offset=0', { cache: 'no-store', signal: request.signal })
       const body = await response.json().catch(() => null) as unknown
       if (!response.ok) throw new Error(readError(body, '通知读取失败。'))
       const parsed = parseNotificationResponse(body)
       if (!parsed) throw new Error('通知响应格式无效。')
-      if (controller.signal.aborted || requestSequence !== loadSequenceRef.current) return false
+      if (!request.isCurrent()) return false
       setNotifications(parsed.notifications)
       setUnreadCount(parsed.unreadCount)
       setTotal(parsed.total)
@@ -77,14 +69,14 @@ export function NotificationCenter({ user, refreshKey = 0 }: { user: SessionUser
       setHasLoaded(true)
       return true
     } catch (cause) {
-      if (controller.signal.aborted || requestSequence !== loadSequenceRef.current) return false
+      if (!request.isCurrent()) return false
       setError(cause instanceof Error ? cause.message : '通知读取失败。')
       return false
     } finally {
-      if (loadControllerRef.current === controller) loadControllerRef.current = undefined
-      if (showLoading && !controller.signal.aborted && requestSequence === loadSequenceRef.current) setLoading(false)
+      request.end()
+      if (showLoading && request.isCurrent()) setLoading(false)
     }
-  }, [userId])
+  }, [begin, userId])
 
   const markRead = useCallback(async ({ all = false, ids = [] }: { all?: boolean; ids?: string[] }) => {
     if (!all && !ids.length) return

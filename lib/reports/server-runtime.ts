@@ -1,5 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite'
-import type { AuthUser } from '@/lib/auth/session'
+import type { SessionUser as AuthUser } from '@/modules/users/domain'
 import { getRequestUser } from '@/lib/auth/request'
 import { getDatabase } from '@/lib/db/client'
 import { isNativeSchemaError, publicNativeSchemaFailure } from '@/lib/db/native-schema-error'

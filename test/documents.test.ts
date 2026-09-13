@@ -4,7 +4,7 @@ import { mkdtemp, readdir, rm, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { deflateRawSync } from 'node:zlib'
-import { DocumentParseError, fitTextToPrompt, isDocumentParseError, extractCachedDocumentText, extractDocumentText, extractDocxText, extractPdfText } from '../lib/documents/document-parser'
+import { DocumentParseError, isDocumentParseError, extractDocumentText, extractDocxText, extractPdfText } from '../lib/documents/document-parser'
 import { maxUploadBytes, persistReportStream, ReportUploadError, writeBufferFully } from '../lib/documents/report-storage'
 
 const directory = await mkdtemp(`${tmpdir()}/yanxing-documents-`)
@@ -205,18 +205,6 @@ test('extractPdfText extracts plain text from a minimal PDF', async () => {
   assert.ok(extracted.characterCount > 0)
 })
 
-test('extracted report text is reused from its private source cache', async () => {
-  const pdfPath = path.join(directory, 'cached.pdf')
-  await writeFile(pdfPath, createMinimalPdfBuffer('Cached report content'))
-
-  const first = await extractCachedDocumentText(pdfPath)
-  await rm(pdfPath)
-  const cached = await extractCachedDocumentText(pdfPath)
-
-  assert.deepEqual(cached, first)
-  assert.ok(cached.text.includes('Cached report content'))
-})
-
 test('DOCX parser accepts a minimal valid document after archive preflight', async () => {
   const docxPath = path.join(directory, 'valid.docx')
   await writeFile(docxPath, createMinimalDocxBuffer('DOCX resource limits remain compatible'))
@@ -329,25 +317,4 @@ test('writeBufferFully retries short writes and rejects zero progress', async ()
     () => writeBufferFully({ write: async () => { throw new Error('disk full') } }, Buffer.from('x')),
     /disk full/,
   )
-})
-
-test('fitTextToPrompt treats the remaining budget as a hard cap', () => {
-  const body = '正文内容'.repeat(8_000)
-  const budget = 800
-  const fitted = fitTextToPrompt(body, budget)
-  assert.equal(fitted.text.length, budget)
-  assert.equal(fitted.truncated, true)
-  assert.ok(fitted.text.includes('[正文中间部分因模型提示词限制被省略]'))
-
-  assert.equal(fitTextToPrompt('abc', 0).text, '')
-  assert.equal(fitTextToPrompt('abc', 0).truncated, true)
-  assert.equal(fitTextToPrompt('', 0).truncated, false)
-  assert.equal(fitTextToPrompt('short', 100).text, 'short')
-  assert.equal(fitTextToPrompt('short', 100).truncated, false)
-  assert.throws(() => fitTextToPrompt('abc', -1), /预算无效/)
-  assert.throws(() => fitTextToPrompt('abc', Number.NaN), /预算无效/)
-
-  const tiny = fitTextToPrompt('abcdefghij', 5)
-  assert.equal(tiny.text, 'abcde')
-  assert.equal(tiny.truncated, true)
 })

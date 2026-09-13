@@ -24,6 +24,8 @@
 !public/
 !public/**
 !proxy.ts
+# Host-only benchmark imports test fixtures, which are intentionally outside the build context.
+scripts/p5-contention-benchmark.ts
 **/.env*
 **/*.sqlite*
 **/*.log

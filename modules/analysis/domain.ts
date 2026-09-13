@@ -15,18 +15,6 @@ export interface AnalysisJob {
   stageIndex: number
   attempts: number
   cancelRequested: boolean
-  requestedByUserId?: string
-  availableAt?: string
-  priority?: number
-  admissionId?: string
-  lastClaimedAt?: string
-  lastRetryAt?: string
-  lastRetryReason?: string
-  lastWorkerId?: string
-  lastErrorCode?: string
-  lastErrorAt?: string
-  terminalReason?: string
-  terminalAt?: string
   aiCallsStarted?: number
   aiCallsCompleted?: number
   errorMessage?: string

@@ -1,8 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { isStagePlanEdit, isStageProjectCreate } from '../modules/projects/stage-project-contract'
 import {
-  isStagePlanEdit,
-  isStageProjectCreate,
   isWorkspaceProjectSafeEdit,
   isWorkspaceReportDelete,
   WORKSPACE_API,

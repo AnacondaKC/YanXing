@@ -45,7 +45,6 @@ Apache 2.0 **不**授予研行或任何第三方商标使用权（见 `LICENSE` 
 | `@next/env` | 16.3.2 | MIT（包内无独立 LICENSE 文件，`package.json` 声明 MIT） | https://github.com/vercel/next.js |
 | `react` | 19.2.0 | MIT（Meta Platforms, Inc. and affiliates） | https://github.com/facebook/react |
 | `react-dom` | 19.2.0 | MIT | https://github.com/facebook/react |
-| `@visx/heatmap` | 4.0.0 | MIT（Harrison Shoff） | https://github.com/airbnb/visx |
 | `@visx/hierarchy` | 4.0.0 | MIT | https://github.com/airbnb/visx |
 | `@visx/wordcloud` | 4.0.0 | MIT | https://github.com/airbnb/visx |
 | `docx-preview` | 0.4.0 | Apache-2.0 | https://github.com/VolodymyrBaydalka/docxjs |
@@ -53,7 +52,6 @@ Apache 2.0 **不**授予研行或任何第三方商标使用权（见 `LICENSE` 
 | `pdf-parse` | 2.4.5 | Apache-2.0 | https://github.com/mehmet-kozan/pdf-parse |
 | `lucide-react` | 0.468.0 | ISC。LICENSE 另声明：部分版权属 Cole Bemis 2013–2022（Feather，MIT），其余属 Lucide Contributors 2022 | https://github.com/lucide-icons/lucide |
 | `tsx` | 4.23.1 | MIT（Hiroki Osame） | https://github.com/privatenumber/tsx |
-| `tw-animate-css` | 1.3.3 | MIT（Wombosvideo） | https://github.com/Wombosvideo/tw-animate-css |
 | `typebox` | 1.3.7 | MIT（`license` 文件：Haydn Paterson） | https://github.com/sinclairzx81/typebox |
 
 若另行再分发上述包的文件或打包后的代码，应保留适用的版权与许可声明。本源码发行未附带这些依赖包；许可证全文应从对应版本的包或上游来源获取。

@@ -5,8 +5,8 @@ import { createElement, type ComponentProps } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { ReportHistoryView, type ReportHistoryViewProps } from '../components/report-history-view'
 import { WorkspaceSubmitDialog } from '../components/workspace-submit-flow'
+import { getSubmissionDisplayLabels } from '../modules/reports/submission-query'
 import {
-  getSubmissionDisplayLabels,
   previewSubmissionImpact,
   type WorkspaceReportCard,
   type WorkspaceStageGroup,

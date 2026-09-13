@@ -37,6 +37,7 @@ import {
   type QualityBand,
 } from '@/lib/overview-presentation'
 import { CardAura } from '@/components/ui/card-decoration'
+import { sparklineGeometry, sparklineValues } from '@/lib/sparkline-geometry'
 import type { WorkspaceKnowledgeCard, WorkspaceOverviewStats, WorkspaceProjectListItem, WorkspaceReportCard } from '@/lib/workspace-submission'
 
 const qualityBandMeta: Record<QualityBand, { label: string; bar: string; dot: string; text: string }> = {
@@ -78,12 +79,40 @@ const PANEL_SHELL = 'relative overflow-hidden rounded-lg border border-yx-line b
 
 type PanelKind = 'quality' | 'reports' | 'knowledge'
 
-/** 右下角主题插画：与报告提交总数等指标卡同一位置、同一透明度。 */
-function PanelDecoration({ kind }: { kind: PanelKind }) {
+function DecorationShell({ children }: { children: ReactNode }) {
   return (
     <div aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden">
       <CardAura />
+      {children}
+    </div>
+  )
+}
 
+function StackedDocsMark() {
+  return (
+    <svg className="absolute -bottom-1.5 -right-1 h-[3.75rem] w-[3.75rem] text-yx-brand/45" viewBox="0 0 56 56" fill="none">
+      <rect x="10" y="10" width="26" height="32" rx="5" transform="rotate(-14 23 26)" fill="color-mix(in srgb, var(--yx-brand) 8%, transparent)" stroke="currentColor" strokeWidth="1.4" />
+      <rect x="14" y="10" width="26" height="32" rx="5" transform="rotate(-5 27 26)" fill="color-mix(in srgb, var(--yx-brand) 10%, transparent)" stroke="currentColor" strokeWidth="1.4" />
+      <rect x="18" y="12" width="26" height="32" rx="5" fill="var(--yx-brand-soft)" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M24 22h14M24 27h10M24 32h12" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" opacity="0.55" />
+    </svg>
+  )
+}
+
+function KnowledgeBookMark() {
+  return (
+    <svg className="absolute -bottom-0.5 right-1 h-12 w-14 text-yx-brand/42" viewBox="0 0 56 48" fill="none">
+      <path d="M28 12v26" stroke="currentColor" strokeWidth="1.3" />
+      <path d="M28 12c-7-4.5-18-4-22 1v25c5-4.5 15-5 22 .5 7-5.5 17-5 22-.5V13c-4-5-15-5.5-22-1Z" fill="color-mix(in srgb, var(--yx-brand) 8%, transparent)" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+      <path d="M14 20h9M14 25h7M33 20h9M33 25h7" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" opacity="0.55" />
+    </svg>
+  )
+}
+
+/** 右下角主题插画：与报告提交总数等指标卡同一位置、同一透明度。 */
+function PanelDecoration({ kind }: { kind: PanelKind }) {
+  return (
+    <DecorationShell>
       {kind === 'quality' ? (
         <svg className="absolute -bottom-1 right-1.5 h-[3.75rem] w-[3.75rem] text-yx-brand/42" viewBox="0 0 56 56" fill="none">
           <circle cx="28" cy="28" r="20" stroke="currentColor" strokeWidth="1.3" opacity="0.35" />
@@ -94,24 +123,9 @@ function PanelDecoration({ kind }: { kind: PanelKind }) {
           <circle cx="28" cy="26.5" r="2.1" fill="currentColor" />
         </svg>
       ) : null}
-
-      {kind === 'reports' ? (
-        <svg className="absolute -bottom-1.5 -right-1 h-[3.75rem] w-[3.75rem] text-yx-brand/45" viewBox="0 0 56 56" fill="none">
-          <rect x="10" y="10" width="26" height="32" rx="5" transform="rotate(-14 23 26)" fill="color-mix(in srgb, var(--yx-brand) 8%, transparent)" stroke="currentColor" strokeWidth="1.4" />
-          <rect x="14" y="10" width="26" height="32" rx="5" transform="rotate(-5 27 26)" fill="color-mix(in srgb, var(--yx-brand) 10%, transparent)" stroke="currentColor" strokeWidth="1.4" />
-          <rect x="18" y="12" width="26" height="32" rx="5" fill="var(--yx-brand-soft)" stroke="currentColor" strokeWidth="1.4" />
-          <path d="M24 22h14M24 27h10M24 32h12" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" opacity="0.55" />
-        </svg>
-      ) : null}
-
-      {kind === 'knowledge' ? (
-        <svg className="absolute -bottom-0.5 right-1 h-12 w-14 text-yx-brand/42" viewBox="0 0 56 48" fill="none">
-          <path d="M28 12v26" stroke="currentColor" strokeWidth="1.3" />
-          <path d="M28 12c-7-4.5-18-4-22 1v25c5-4.5 15-5 22 .5 7-5.5 17-5 22-.5V13c-4-5-15-5.5-22-1Z" fill="color-mix(in srgb, var(--yx-brand) 8%, transparent)" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
-          <path d="M14 20h9M14 25h7M33 20h9M33 25h7" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" opacity="0.55" />
-        </svg>
-      ) : null}
-    </div>
+      {kind === 'reports' ? <StackedDocsMark /> : null}
+      {kind === 'knowledge' ? <KnowledgeBookMark /> : null}
+    </DecorationShell>
   )
 }
 
@@ -155,18 +169,7 @@ function MiniSparkline({
   const width = 48
   const height = 20
   const pad = 1.5
-  const values = points.length > 1 ? points : points.length === 1 ? [points[0], points[0]] : [0, 0]
-  const min = Math.min(...values)
-  const max = Math.max(...values)
-  const flat = max === min
-  const range = flat ? 1 : max - min
-  const coords = values.map((point, index) => {
-    const x = pad + (index * (width - pad * 2)) / (values.length - 1)
-    const y = flat ? height / 2 : height - pad - ((point - min) / range) * (height - pad * 2)
-    return [x, y] as const
-  })
-  const linePath = coords.map((coord, index) => (index === 0 ? 'M' : 'L') + coord[0].toFixed(1) + ',' + coord[1].toFixed(1)).join(' ')
-  const areaPath = linePath + ' L' + coords[coords.length - 1][0].toFixed(1) + ',' + height + ' L' + coords[0][0].toFixed(1) + ',' + height + ' Z'
+  const { coords, linePath, areaPath } = sparklineGeometry(sparklineValues(points), { width, height, pad })
   const last = coords[coords.length - 1]
   const hasData = points.some((point) => point > 0)
 
@@ -217,18 +220,7 @@ function PanelTrendChart({ points, gradientId, label }: { points: number[]; grad
   const width = 96
   const height = 28
   const pad = 2
-  const values = points.length > 1 ? points : points.length === 1 ? [points[0], points[0]] : [0, 0]
-  const min = Math.min(...values)
-  const max = Math.max(...values)
-  const flat = max === min
-  const range = flat ? 1 : max - min
-  const coords = values.map((point, index) => {
-    const x = pad + (index * (width - pad * 2)) / (values.length - 1)
-    const y = flat ? height / 2 : height - pad - ((point - min) / range) * (height - pad * 2)
-    return [x, y] as const
-  })
-  const linePath = coords.map((coord, index) => (index === 0 ? 'M' : 'L') + coord[0].toFixed(1) + ',' + coord[1].toFixed(1)).join(' ')
-  const areaPath = linePath + ' L' + coords[coords.length - 1][0].toFixed(1) + ',' + height + ' L' + coords[0][0].toFixed(1) + ',' + height + ' Z'
+  const { coords, linePath, areaPath } = sparklineGeometry(sparklineValues(points), { width, height, pad })
   const last = coords[coords.length - 1]
   const hasData = points.length > 0
 
@@ -274,25 +266,14 @@ type StatCardKind = 'versions' | 'characters' | 'success' | 'knowledge'
 
 function StatCardDecoration({ kind }: { kind: StatCardKind }) {
   return (
-    <div aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden">
-      <CardAura />
-
-      {kind === 'versions' ? (
-        <svg className="absolute -bottom-1.5 -right-1 h-[3.75rem] w-[3.75rem] text-yx-brand/45" viewBox="0 0 56 56" fill="none">
-          <rect x="10" y="10" width="26" height="32" rx="5" transform="rotate(-14 23 26)" fill="color-mix(in srgb, var(--yx-brand) 8%, transparent)" stroke="currentColor" strokeWidth="1.4" />
-          <rect x="14" y="10" width="26" height="32" rx="5" transform="rotate(-5 27 26)" fill="color-mix(in srgb, var(--yx-brand) 10%, transparent)" stroke="currentColor" strokeWidth="1.4" />
-          <rect x="18" y="12" width="26" height="32" rx="5" fill="var(--yx-brand-soft)" stroke="currentColor" strokeWidth="1.4" />
-          <path d="M24 22h14M24 27h10M24 32h12" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" opacity="0.55" />
-        </svg>
-      ) : null}
-
+    <DecorationShell>
+      {kind === 'versions' ? <StackedDocsMark /> : null}
       {kind === 'characters' ? (
         <svg className="absolute bottom-1.5 right-1.5 h-12 w-12 text-yx-brand/40" viewBox="0 0 48 48" fill="none">
           <rect x="10" y="6" width="28" height="36" rx="5" fill="color-mix(in srgb, var(--yx-brand) 7%, transparent)" stroke="currentColor" strokeWidth="1.4" />
           <path d="M16 16h16M16 22h16M16 28h11M16 34h8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
         </svg>
       ) : null}
-
       {kind === 'success' ? (
         <svg className="absolute bottom-1.5 right-1.5 h-12 w-12 text-yx-brand/40" viewBox="0 0 48 48" fill="none">
           <rect x="12" y="10" width="24" height="32" rx="5" fill="color-mix(in srgb, var(--yx-brand) 7%, transparent)" stroke="currentColor" strokeWidth="1.4" />
@@ -301,15 +282,8 @@ function StatCardDecoration({ kind }: { kind: StatCardKind }) {
           <path d="M27 23h6M27 32h6" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" opacity="0.55" />
         </svg>
       ) : null}
-
-      {kind === 'knowledge' ? (
-        <svg className="absolute -bottom-0.5 right-1 h-12 w-14 text-yx-brand/42" viewBox="0 0 56 48" fill="none">
-          <path d="M28 12v26" stroke="currentColor" strokeWidth="1.3" />
-          <path d="M28 12c-7-4.5-18-4-22 1v25c5-4.5 15-5 22 .5 7-5.5 17-5 22-.5V13c-4-5-15-5.5-22-1Z" fill="color-mix(in srgb, var(--yx-brand) 8%, transparent)" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
-          <path d="M14 20h9M14 25h7M33 20h9M33 25h7" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" opacity="0.55" />
-        </svg>
-      ) : null}
-    </div>
+      {kind === 'knowledge' ? <KnowledgeBookMark /> : null}
+    </DecorationShell>
   )
 }
 
@@ -318,17 +292,7 @@ function StatTrendSparkline({ points, gradientId }: { points: number[]; gradient
   const height = 28
   const pad = 2
   if (points.length < 2) return null
-  const min = Math.min(...points)
-  const max = Math.max(...points)
-  const flat = max === min
-  const range = flat ? 1 : max - min
-  const coords = points.map((point, index) => {
-    const x = pad + (index * (width - pad * 2)) / (points.length - 1)
-    const y = flat ? height / 2 : height - pad - ((point - min) / range) * (height - pad * 2)
-    return [x, y] as const
-  })
-  const linePath = coords.map((c, i) => (i === 0 ? 'M' : 'L') + c[0].toFixed(1) + ',' + c[1].toFixed(1)).join(' ')
-  const areaPath = linePath + ' L' + coords[coords.length - 1][0].toFixed(1) + ',' + height + ' L' + coords[0][0].toFixed(1) + ',' + height + ' Z'
+  const { coords, linePath, areaPath } = sparklineGeometry(points, { width, height, pad })
   const last = coords[coords.length - 1]
   return (
     <svg viewBox={'0 0 ' + width + ' ' + height} className="h-7 w-[5.5rem] max-w-[46%] shrink-0 overflow-visible" aria-label="近 7 日趋势">

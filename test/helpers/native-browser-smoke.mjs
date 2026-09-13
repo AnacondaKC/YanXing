@@ -1,23 +1,27 @@
 import assert from 'node:assert/strict'
 import {spawn,spawnSync} from 'node:child_process'
-import {access,mkdtemp,writeFile} from 'node:fs/promises'
+import {access,mkdir,mkdtemp,readdir,writeFile} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join,resolve} from 'node:path'
 import {createServer} from 'node:net'
 import {fileURLToPath} from 'node:url'
 
 const projectRoot=fileURLToPath(new URL('../../',import.meta.url))
-const root=await mkdtemp(join(tmpdir(),process.argv.includes('--p5')?'yanxing-p5-browser-':'yanxing-p4-browser-'))
+const artifactsRoot=process.env.YANXING_BROWSER_ARTIFACTS_ROOT??tmpdir()
+await mkdir(artifactsRoot,{recursive:true})
+const root=await mkdtemp(join(artifactsRoot,process.argv.includes('--p5')?'yanxing-p5-browser-':'yanxing-p4-browser-'))
+const browserExecutable=process.env.YANXING_BROWSER_EXECUTABLE??'/usr/bin/google-chrome'
 const releaseRoot=process.env.P5_RELEASE_ROOT
 const children=[]
+const closedChildren=[]
 const env={...process.env,NODE_ENV:'production',...(releaseRoot?{YANXING_COMPILED_RUNTIME:'1'}:{}),YANXING_NEXT_DIST_DIR:process.env.YANXING_NEXT_DIST_DIR??'.next-p4-qa',YANXING_DATABASE_PATH:join(root,'app.sqlite'),YANXING_KNOWLEDGE_STORAGE_ROOT:join(root,'knowledge'),YANXING_SETTINGS_ENCRYPTION_KEY:'browser-only-isolated-test-key',YANXING_CHAT_COMPLETIONS_API_KEY:'',YANXING_WORKER_READY_PATH:join(root,'worker-ready'),YANXING_WORKER_HEARTBEAT_PATH:join(root,'worker-heartbeat.json'),YANXING_INSTANCE_TOKEN:'p4-browser-isolated-worker',P4_BROWSER_ROOT:root}
 let socket,sessionId,nextLog='',chromeLog='',workerLog=''
 const pending=new Map(),errors=[]
 let sequence=0,dropConfirmation=true,authRequests=0,prepareRequests=0
 const confirmations=[]
 const delay=ms=>new Promise(done=>setTimeout(done,ms))
-async function waitFor(check,label){for(let i=0;i<100;i++){try{if(await check())return}catch{}await delay(100)}throw new Error('Timeout: '+label)}
-function child(command,args,options={}){const result=spawn(command,args,{cwd:projectRoot,env,...options});children.push(result);return result}
+async function waitFor(check,label){const deadline=Date.now()+30000;let cause;while(Date.now()<deadline){try{if(await check())return}catch(error){cause=error}await delay(100)}throw new Error('Timeout: '+label,{cause})}
+function child(command,args,options={}){const result=spawn(command,args,{cwd:projectRoot,env,...options});result.on('error',error=>errors.push(String(error)));closedChildren.push(new Promise(resolve=>result.once('close',resolve)));children.push(result);return result}
 function call(method,params={},session){const id=++sequence;return new Promise((resolve,reject)=>{const timer=setTimeout(()=>{pending.delete(id);reject(Error('CDP timeout: '+method))},10000);pending.set(id,{resolve,reject,timer});try{socket.send(JSON.stringify({id,method,params,...(session?{sessionId:session}:{})}))}catch(error){clearTimeout(timer);pending.delete(id);reject(error)}})}
 const page=(method,params={})=>call(method,params,sessionId)
 async function evaluate(expression){const result=await page('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true});if(result.exceptionDetails)throw new Error(result.exceptionDetails.exception?.description??result.exceptionDetails.text);return result.result.value}
@@ -30,7 +34,8 @@ async function api(path,body,requestOptions={}){
   return evaluate('(async()=>{const options='+JSON.stringify(options)+';const token=document.cookie.split("; ").find(x=>x.split("=")[0].endsWith("yanxing_csrf"))?.split("=").slice(1).join("=");options.headers["x-yanxing-csrf"]=decodeURIComponent(token??"");const response=await fetch('+JSON.stringify(path)+',options);return {status:response.status,body:await response.json()}})()')
 }
 try {
-  const seeded=spawnSync(process.execPath,['--import',import.meta.resolve('tsx'),resolve(projectRoot,'test/helpers/native-browser-seed.ts')],{cwd:projectRoot,env,encoding:'utf8'})
+  await access(browserExecutable)
+  const seeded=spawnSync(process.execPath,['--import',import.meta.resolve('tsx'),resolve(projectRoot,'test/helpers/native-browser-seed.ts')],{cwd:projectRoot,env,encoding:'utf8',timeout:30000})
   if(seeded.status!==0)throw Error(seeded.stderr)
   const worker=child(process.execPath,[resolve(releaseRoot??projectRoot,'.runtime/worker/index.mjs')],{cwd:releaseRoot??projectRoot})
   worker.stdout.on('data',data=>workerLog+=data);worker.stderr.on('data',data=>workerLog+=data)
@@ -41,8 +46,8 @@ try {
     ?child(process.execPath,[resolve(releaseRoot,'server.js')],{cwd:releaseRoot,env:{...env,PORT:String(port),HOSTNAME:'127.0.0.1'}})
     :child(process.execPath,[resolve(projectRoot,'node_modules/next/dist/bin/next'),'start','-p',String(port),'--hostname','127.0.0.1'])
   next.stdout.on('data',data=>nextLog+=data);next.stderr.on('data',data=>nextLog+=data)
-  await waitFor(async()=>{const response=await fetch(base+'/login');return response.ok},'isolated Next server')
-  const chrome=child('/usr/bin/google-chrome',['--headless=new','--no-sandbox','--disable-dev-shm-usage','--disable-background-networking','--no-first-run','--remote-debugging-port=0','--user-data-dir='+join(root,'chrome'),'about:blank'])
+  await waitFor(async()=>{const response=await fetch(base+'/login',{signal:AbortSignal.timeout(3000)});return response.ok},'isolated Next server')
+  const chrome=child(browserExecutable,['--headless=new','--no-sandbox','--disable-dev-shm-usage','--disable-background-networking','--no-first-run','--remote-debugging-port=0','--user-data-dir='+join(root,'chrome'),'about:blank'])
   chrome.stderr.on('data',data=>chromeLog+=data)
   await waitFor(()=>chromeLog.includes('DevTools listening on ws:'),'Chrome CDP')
   socket=new WebSocket(chromeLog.split('DevTools listening on ')[1].trim().split(String.fromCharCode(10))[0])
@@ -182,8 +187,12 @@ try {
   assert.deepEqual(errors,[])
   assert.ok(authRequests>0&&authRequests<=8,'startup must not flood or repeatedly abort authentication requests')
   const extended=process.argv.includes('--p5')?await (await import('./p5-browser-checks.mjs')).runP5BrowserChecks({api,page,evaluate,click,navigate,text,waitFor,screenshot,base,projectId:project.id,reportId}):undefined
+  const extendedPonytail=process.argv.includes('--ponytail')?await (await import('./ponytail-browser-checks.mjs')).runPonytailBrowserChecks({api,page,evaluate,click,navigate,text,waitFor,screenshot,base,projectId:project.id,reportId,root}):undefined
   assert.deepEqual(errors,[])
-  console.log(JSON.stringify({ok:true,root,projectId:project.id,reportId,screenshots:9,confirmationRequests:confirmations.length,authRequests,paidProviderCalls:0,extended}))
+  const screenshotFiles=(await readdir(root)).filter(name=>name.endsWith('.png')).sort()
+  const summary={ok:true,root,projectId:project.id,reportId,screenshots:screenshotFiles.length,screenshotFiles,confirmationRequests:confirmations.length,authRequests,paidProviderCalls:0,extended,ponytail:extendedPonytail}
+  await writeFile(join(root,'summary.json'),JSON.stringify(summary,null,2))
+  console.log(JSON.stringify(summary))
 } catch(error) {
   await screenshot('failure').catch(()=>{})
   console.error(String(error));console.error('Browser text:',await text().catch(()=>''));console.error('Browser errors:',errors)
@@ -192,7 +201,8 @@ try {
   socket?.close()
   for(const process of children)process.kill('SIGTERM')
   await delay(500)
-  for(const process of children)if(process.exitCode===null)process.kill('SIGKILL')
+  for(const process of children)if(process.exitCode===null&&process.signalCode===null)process.kill('SIGKILL')
+  await Promise.all(closedChildren)
   await writeFile(join(root,'next.log'),nextLog)
   await writeFile(join(root,'chrome.log'),chromeLog)
   await writeFile(join(root,'worker.log'),workerLog)

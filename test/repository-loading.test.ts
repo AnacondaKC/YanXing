@@ -179,3 +179,29 @@ test('controlled reports repository surfaces parent load errors for retry', () =
   assert.match(html, />重试</)
   assert.doesNotMatch(html, /暂无匹配的报告|>0</)
 })
+
+function repositorySparkline(points: number[], gradientId: string) {
+  const html = renderToStaticMarkup(createElement(RepositoryStatCell, {
+    label: '报告数量',
+    value: '12',
+    unit: '份',
+    icon: FileText,
+    points,
+    trendLabel: '报告数量走势',
+    gradientId,
+  }))
+  const idx = html.indexOf('aria-label="报告数量走势"')
+  assert.notEqual(idx, -1)
+  return html.slice(html.lastIndexOf('<svg', idx), html.indexOf('</svg>', idx) + 6)
+}
+
+test('repository sparkline keeps original smooth area, dual halo and hasData dash branches', () => {
+  assert.equal(repositorySparkline([], 'cap-repo-empty'), '<svg viewBox="0 0 56 22" class="mb-0.5 h-[22px] w-14 shrink-0 overflow-visible" role="img" aria-label="报告数量走势"><title>报告数量走势</title><defs><linearGradient id="cap-repo-empty" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="var(--yx-brand)" stop-opacity="0.28"></stop><stop offset="100%" stop-color="var(--yx-brand)" stop-opacity="0"></stop></linearGradient></defs><path d="M2.0,11.0 C10.7,11.0 45.3,11.0 54.0,11.0" fill="none" stroke="var(--yx-line)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="2 3"></path></svg>')
+  assert.equal(repositorySparkline([0, 0, 0], 'cap-repo-zeros'), '<svg viewBox="0 0 56 22" class="mb-0.5 h-[22px] w-14 shrink-0 overflow-visible" role="img" aria-label="报告数量走势"><title>报告数量走势</title><defs><linearGradient id="cap-repo-zeros" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="var(--yx-brand)" stop-opacity="0.28"></stop><stop offset="100%" stop-color="var(--yx-brand)" stop-opacity="0"></stop></linearGradient></defs><path d="M2.0,11.0 C6.3,11.0 19.3,11.0 28.0,11.0 C36.7,11.0 49.7,11.0 54.0,11.0" fill="none" stroke="var(--yx-line)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="2 3"></path></svg>')
+  assert.equal(repositorySparkline([5], 'cap-repo-one-positive'), '<svg viewBox="0 0 56 22" class="mb-0.5 h-[22px] w-14 shrink-0 overflow-visible" role="img" aria-label="报告数量走势"><title>报告数量走势</title><defs><linearGradient id="cap-repo-one-positive" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="var(--yx-brand)" stop-opacity="0.28"></stop><stop offset="100%" stop-color="var(--yx-brand)" stop-opacity="0"></stop></linearGradient></defs><path d="M2.0,11.0 C10.7,11.0 45.3,11.0 54.0,11.0 L54.0,22 L2.0,22 Z" fill="url(#cap-repo-one-positive)"></path><path d="M2.0,11.0 C10.7,11.0 45.3,11.0 54.0,11.0" fill="none" stroke="var(--yx-brand)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path><circle cx="54" cy="11" r="3.1" fill="var(--yx-brand)" opacity="0.18"></circle><circle cx="54" cy="11" r="1.7" fill="var(--yx-brand)" stroke="var(--yx-paper)" stroke-width="0.9"></circle></svg>')
+  const rising = repositorySparkline([1, 5, 12], 'cap-repo-rising')
+  assert.equal(rising, '<svg viewBox="0 0 56 22" class="mb-0.5 h-[22px] w-14 shrink-0 overflow-visible" role="img" aria-label="报告数量走势"><title>报告数量走势</title><defs><linearGradient id="cap-repo-rising" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="var(--yx-brand)" stop-opacity="0.28"></stop><stop offset="100%" stop-color="var(--yx-brand)" stop-opacity="0"></stop></linearGradient></defs><path d="M2.0,20.0 C6.3,18.9 19.3,16.5 28.0,13.5 C36.7,10.5 49.7,3.9 54.0,2.0 L54.0,22 L2.0,22 Z" fill="url(#cap-repo-rising)"></path><path d="M2.0,20.0 C6.3,18.9 19.3,16.5 28.0,13.5 C36.7,10.5 49.7,3.9 54.0,2.0" fill="none" stroke="var(--yx-brand)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path><circle cx="54" cy="2" r="3.1" fill="var(--yx-brand)" opacity="0.18"></circle><circle cx="54" cy="2" r="1.7" fill="var(--yx-brand)" stroke="var(--yx-paper)" stroke-width="0.9"></circle></svg>')
+  assert.match(rising, / C6\.3,18\.9 /)
+  assert.doesNotMatch(rising, /d="M2.0,20.0 L28.0,13.5 L54.0,2.0 L54.0,22/)
+  assert.equal((rising.match(/<circle /g) || []).length, 2)
+})

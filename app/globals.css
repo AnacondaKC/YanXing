@@ -1,5 +1,4 @@
 @import 'tailwindcss';
-@import 'tw-animate-css';
 @import './color-tokens.css';
 
 @theme inline {
@@ -1680,6 +1679,14 @@ body {
 @keyframes yx-overview-fade {
   from { opacity: 0; }
   to { opacity: 1; }
+}
+
+.yx-notice-enter { animation: yx-overview-fade 150ms ease forwards; }
+.yx-user-menu-enter { animation: yx-user-menu-enter 100ms ease forwards; }
+
+@keyframes yx-user-menu-enter {
+  from { opacity: 0; transform: scale3d(0.95, 0.95, 0.95); }
+  to { opacity: 1; transform: none; }
 }
 
 @keyframes yx-overview-score-arc {

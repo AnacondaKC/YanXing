@@ -2,23 +2,13 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createRetryableLazyResource } from '../lib/retryable-lazy'
 
-function deferred<T>() {
-  let resolve!: (value: T) => void
-  let reject!: (error: unknown) => void
-  const promise = new Promise<T>((nextResolve, nextReject) => {
-    resolve = nextResolve
-    reject = nextReject
-  })
-  return { promise, resolve, reject }
-}
-
 function wrapForLazy<T>(load: Promise<T>) {
   return load.then((Loaded) => ({ default: Loaded }))
 }
 
 test('pending load joins the in-flight import instead of starting another', async () => {
   let calls = 0
-  const pending = deferred<string>()
+  const pending = Promise.withResolvers<string>()
   const resource = createRetryableLazyResource(() => {
     calls += 1
     return pending.promise
@@ -72,7 +62,7 @@ test('rejected import retries with a new loader attempt then succeeds', async ()
 
 test('failed load stays a rejection for React.lazy default wrapping', async () => {
   let calls = 0
-  const pending = deferred<string>()
+  const pending = Promise.withResolvers<string>()
   const resource = createRetryableLazyResource(() => {
     calls += 1
     return pending.promise
@@ -102,7 +92,7 @@ test('synchronous loader throw becomes a rejected attempt that can retry', async
 
 test('abandoned pending success is reused without a second import', async () => {
   let calls = 0
-  const pending = deferred<string>()
+  const pending = Promise.withResolvers<string>()
   const resource = createRetryableLazyResource(() => {
     calls += 1
     return pending.promise

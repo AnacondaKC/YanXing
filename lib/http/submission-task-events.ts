@@ -1,4 +1,5 @@
-import type {AuthUser} from '@/lib/auth/session'
+import { setTimeout as wait } from 'node:timers/promises'
+import type {SessionUser as AuthUser} from '@/modules/users/domain'
 import type {SubmissionWorkspaceRepository} from '@/lib/db/submission-workspace-repository'
 
 export function createJobEventStream(input:{workspace:SubmissionWorkspaceRepository;getCurrentUser:(request:Request)=>AuthUser|undefined;onError:(error:unknown)=>Response}) {
@@ -63,11 +64,8 @@ function parseCursor(request:Request){
   }
   return 0
 }
-function sleep(ms:number,signal:AbortSignal){
-  return new Promise<void>(resolve=>{
-    if(signal.aborted){resolve();return}
-    const finish=()=>{clearTimeout(timer);signal.removeEventListener('abort',finish);resolve()}
-    const timer=setTimeout(finish,ms)
-    signal.addEventListener('abort',finish,{once:true})
+function sleep(ms:number,signal:AbortSignal) {
+  return wait(ms,undefined,{signal}).catch((error:unknown)=>{
+    if(!(error instanceof Error && error.name==='AbortError'))throw error
   })
 }

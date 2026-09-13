@@ -299,10 +299,6 @@ export function getAiPromptSettingsSnapshotInDatabase(database: DatabaseSync): A
   return getPublicAiPromptSettingsInDatabase(database).prompts.map((prompt) => ({ ...prompt }))
 }
 
-export function getAiPromptSettingsSnapshot(): AnalysisPromptConfig[] {
-  return getAiPromptSettingsSnapshotInDatabase(getDatabase())
-}
-
 export function saveAiPromptSettings(input: AiPromptSettingInput, updatedBy: string, actorId?: string, expectedRevision?: number): PublicAiPromptSettings {
   const systemPrompt = normalizePromptText(input.systemPrompt, '系统提示词')
   const instructions = normalizeInstructionPrompts(input.prompts)
@@ -597,18 +593,6 @@ export function getAiModelRuntimeSnapshotInDatabase(database: DatabaseSync, targ
     assigned,
     settingsRevision: readSettingsRevision(database, 'models'),
     decrypt: (channelName, encrypted) => decryptChannelApiKeyInDatabase(channelName, encrypted),
-  })
-}
-
-export function getAiModelRuntimeSnapshot(target: AiModelSelectionTarget): AiModelRuntimeSnapshot | undefined {
-  const database = getDatabase()
-  const assigned = readAssignedAiModelRuntime(target, database)
-  if (!assigned) return undefined
-  return toAiModelRuntimeSnapshot({
-    target,
-    assigned,
-    settingsRevision: readSettingsRevision(database, 'models'),
-    decrypt: decryptChannelApiKey,
   })
 }
 

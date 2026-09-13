@@ -13,6 +13,7 @@ export function ConfirmDialog({
   cancelLabel = '取消',
   tone = 'danger',
   loading = false,
+  confirmDisabled = false,
   error,
   icon,
   titleId,
@@ -27,6 +28,7 @@ export function ConfirmDialog({
   cancelLabel?: string
   tone?: 'danger' | 'primary'
   loading?: boolean
+  confirmDisabled?: boolean
   error?: string
   icon?: LucideIcon
   titleId: string
@@ -40,22 +42,27 @@ export function ConfirmDialog({
     <Dialog onClose={onClose} labelledBy={titleId} describedBy={descriptionId} initialFocusRef={cancelRef} size="md">
       <DialogHeader
         title={title}
-        description={description}
         titleId={titleId}
-        descriptionId={descriptionId}
         icon={icon ?? Trash2}
         iconTone={tone === 'danger' ? 'danger' : 'brand'}
         onClose={onClose}
       />
-      <DialogBody className="space-y-3 py-4">
-        {children}
-        {error ? <FormError>{error}</FormError> : null}
-      </DialogBody>
+      {description || children || error ? (
+        <DialogBody className="space-y-3">
+          {description ? (
+            <p id={descriptionId} className="text-sm leading-6 text-yx-ink-soft">
+              {description}
+            </p>
+          ) : null}
+          {children}
+          {error ? <FormError>{error}</FormError> : null}
+        </DialogBody>
+      ) : null}
       <DialogFooter>
         <Button ref={cancelRef} variant="ghost" onClick={onClose} disabled={loading}>
           {cancelLabel}
         </Button>
-        <Button variant={tone === 'danger' ? 'danger' : 'primary'} loading={loading} onClick={onConfirm}>
+        <Button variant={tone === 'danger' ? 'danger' : 'primary'} loading={loading} disabled={confirmDisabled} onClick={onConfirm}>
           {confirmLabel}
         </Button>
       </DialogFooter>

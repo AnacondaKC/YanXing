@@ -4,7 +4,7 @@ import { AlertCircle, ArrowRight, FileText, Loader2, Sparkles, Upload } from 'lu
 import type { ProjectTabId } from '@/components/project-executive-header'
 import { Button } from '@/components/ui/button'
 import { EmptyPanelAction, InsightEmptyPreview, WorkspaceEmptyPanel } from '@/components/workspace-empty-panel'
-import { insightEmptyCopy, insightEmptyKind } from '@/lib/insight-empty-state'
+import { insightEmptyCopy } from '@/lib/insight-empty-state'
 import type { WorkspaceReportCard } from '@/lib/workspace-submission'
 
 interface InsightEmptyStateProps {
@@ -22,7 +22,7 @@ interface InsightEmptyStateProps {
 
 export function InsightEmptyState(props: InsightEmptyStateProps) {
   const { report, canManage, canGenerateInsight = true, generating, error, onGenerate } = props
-  const copy = insightEmptyCopy(insightEmptyKind(Boolean(report), generating))
+  const copy = insightEmptyCopy({ report, generating })
 
   return (
     <WorkspaceEmptyPanel

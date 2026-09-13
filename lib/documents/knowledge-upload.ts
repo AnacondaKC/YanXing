@@ -47,6 +47,7 @@ type MultipartParser = Writable & {
 }
 type MultipartFactory = (options: {
   headers: { 'content-type': string }
+  defParamCharset?: string
   limits: { files: number; fields: number; parts: number; fieldSize: number; fileSize: number }
 }) => MultipartParser
 
@@ -246,6 +247,8 @@ export async function parseStreamingMultipart(request: NextRequest, itemDirector
   try {
     parser = createMultipartParser({
       headers: { 'content-type': contentType },
+      // 浏览器把 filename="..." 里的中文按 UTF-8 字节原样发出，busboy 默认按 latin1 解码会得到乱码。
+      defParamCharset: 'utf8',
       limits: { files: 1, fields: 10, parts: 12, fieldSize: 16 * 1024, fileSize: maxFileBytes },
     })
   } catch {

@@ -137,8 +137,8 @@ test('confirmSubmission writes report, document, stages, quota, audit, outbox an
     assert.equal(database.prepare('SELECT owner_id FROM storage_allocations').get()?.owner_id, first.receipt.reportId)
     assert.equal(database.prepare("SELECT 1 FROM sqlite_master WHERE name='report_versions'").get(), undefined)
     assert.equal(database.prepare('SELECT document_text FROM report_uploads').get()?.document_text, null)
-    const payload = JSON.parse(String(database.prepare('SELECT payload_json FROM report_submission_outbox').get()?.payload_json)) as { workflow: { stages: Array<{ lifecycleStatus: string }> } }
-    assert.equal(payload.workflow.stages[0]?.lifecycleStatus, 'in_progress')
+    assert.equal(database.prepare('SELECT payload_json FROM report_submission_outbox').get()?.payload_json, '{}')
+    assert.equal(database.prepare('SELECT lifecycle_status FROM project_stages WHERE id=?').get(first.receipt.stageId)?.lifecycle_status, 'in_progress')
     const replay = repository.confirmSubmission({ ...input, command: { ...input.command } })
     assert.equal(replay.replayed, true)
     assert.deepEqual(replay.receipt, first.receipt)

@@ -1,3 +1,4 @@
+import { setTimeout as wait } from 'node:timers/promises'
 export const CHECKPOINT_BUSY_MAX_ATTEMPTS = 3
 
 export function isTransientSqliteBusyError(error: unknown) {
@@ -24,21 +25,10 @@ export async function retryOnSqliteBusy<T>(
 }
 
 export async function waitForCheckpointRetry(retry: number, signal?: AbortSignal) {
-  const milliseconds = 25 * (retry + 1)
-  if (signal?.aborted) throw cancelledError()
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      signal?.removeEventListener('abort', onAbort)
-      resolve()
-    }, milliseconds)
-    const onAbort = () => {
-      clearTimeout(timer)
-      reject(cancelledError())
-    }
-    signal?.addEventListener('abort', onAbort, { once: true })
-  })
-}
-
-function cancelledError() {
-  return new Error('Analysis cancelled')
+  try {
+    await wait(25 * (retry + 1), undefined, { signal })
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') throw new Error('Analysis cancelled')
+    throw error
+  }
 }

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { DatabaseSync } from 'node:sqlite'
 import { mkdir, mkdtemp, rm, stat, utimes, writeFile } from 'node:fs/promises'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, renameSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import test from 'node:test'
@@ -518,3 +518,59 @@ test('refuses a legacy report_versions database without writing', async () => {
   database.close()
   await rm(directory, { recursive: true, force: true })
 })
+
+for (const kind of ['file', 'sidecar'] as const) {
+  for (const change of ['reference', 'reservation', 'replacement', 'source'] as const) {
+    if (kind === 'file' && change === 'source') continue
+    test('cleanup rechecks ' + kind + ' after concurrent ' + change, async () => {
+      const directory = await mkdtemp(join(tmpdir(), 'yanxing-storage-recheck-'))
+      const roots = { reportRoot: join(directory, 'reports'), knowledgeRoot: join(directory, 'knowledge'), temporaryRoot: join(directory, 'tmp') }
+      const target = createDatabase()
+      try {
+        await Promise.all(Object.values(roots).map(root => mkdir(root)))
+        const sourcePath = join(roots.knowledgeRoot, 'orphan.pdf')
+        const candidatePath = kind === 'sidecar' ? sourcePath + '.content.json' : sourcePath
+        const old = new Date(Date.parse(timestamp) - 86400000)
+        await createFile(candidatePath, 'data', old)
+        target.prepare("INSERT INTO storage_allocations VALUES ('knowledge','old','user',NULL,1,'hash',?,'text/plain',?,?)").run(join(roots.knowledgeRoot, 'old-record'), timestamp, timestamp)
+        let protectionReads = 0
+        const database = new Proxy(target, {
+          get(object, property) {
+            if (property === 'prepare') return (sql: string) => {
+              if (sql === 'SELECT source_path FROM knowledge_items UNION ALL SELECT source_path FROM storage_allocations') {
+                protectionReads += 1
+                if (protectionReads === (kind === 'file' ? 2 : 3)) {
+                  if (change === 'reference') {
+                    target.prepare("INSERT INTO storage_allocations VALUES ('knowledge','new','user',NULL,4,'hash',?,'text/plain',?,?)").run(sourcePath, timestamp, timestamp)
+                  } else if (change === 'reservation') {
+                    target.prepare("INSERT INTO storage_reservations(id,user_id,expected_bytes,owner_type,expires_at,state,created_at,updated_at) VALUES ('new','user',4,'knowledge','2026-01-03T00:00:00.000Z','active',?,?)").run(timestamp, timestamp)
+                  } else if (change === 'replacement') {
+                    renameSync(candidatePath, candidatePath + '.old')
+                    writeFileSync(candidatePath, 'data')
+                    utimesSync(candidatePath, old, old)
+                  } else {
+                    writeFileSync(sourcePath, 'new source')
+                  }
+                }
+              }
+              return object.prepare(sql)
+            }
+            const value = Reflect.get(object, property, object)
+            return typeof value === 'function' ? value.bind(object) : value
+          },
+        })
+        const result = await runStorageMaintenance({ database, roots, now: timestamp })
+        assert.equal(protectionReads, 3, 'files and sidecars each refresh protection after the initial plan')
+        assert.deepEqual(result.errors, [])
+        assert.equal(result.orphanFilesDeleted, 0)
+        assert.equal(result.orphanFilesSkippedProtected, kind === 'file' && change === 'reference' ? 1 : 0)
+        assert.equal(result.orphanFilesSkippedRecent, change === 'replacement' ? 1 : 0)
+        assert.equal(result.orphanFilesSkippedActiveReservation, change === 'reservation' ? 1 : 0)
+        assert.equal(await exists(candidatePath), true)
+      } finally {
+        target.close()
+        await rm(directory, { recursive: true, force: true })
+      }
+    })
+  }
+}

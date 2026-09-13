@@ -28,9 +28,6 @@ export const DOCKER_TIMEOUT_MS = {
   ps: 15_000,
 }
 const defaultUploadLimit = String(25 * 1024 * 1024)
-const supervisorArgv = '/app/scripts/docker-supervisor.mjs'
-const webArgv = '/app/server.js'
-const workerArgv = '/app/.runtime/worker/index.mjs'
 const legacyRefusalPattern = /数据库迁移失败|当前数据库属于旧版报告结构|LEGACY_DATABASE/
 const rememberedSecrets = new Set()
 export const P5_CONTAINER_HELP = "Usage: node scripts/p5-package-container.mjs [options]\n\nBuild and verify an isolated P5 container from an assembled candidate.\nDoes not use latest, existing volumes, or live containers.\n\n  --candidate-root <path>  Assembled candidate directory\n  --image-tag <tag>        Isolated image tag (must not be latest)\n  --report-path <path>     Acceptance JSON output path\n  --help, -h               Show this help\n"
@@ -348,21 +345,16 @@ async function waitForHealth(containerName, timeoutMs) {
 }
 
 async function listRolePids(containerName) {
-  const script = [
-    "import { readdirSync, readFileSync } from 'node:fs'",
-    'const out = { supervisor: [], web: [], worker: [] }',
-    'for (const entry of readdirSync("/proc")) {',
-    '  if (!/^\\d+$/.test(entry)) continue',
-    '  const pid = Number(entry)',
-    '  if (pid <= 1) continue',
-    '  let argv',
-    '  try { argv = readFileSync("/proc/" + pid + "/cmdline", "utf8").split("\\0").filter(Boolean) } catch { continue }',
-    '  if (argv.includes(' + JSON.stringify(supervisorArgv) + ')) out.supervisor.push(pid)',
-    '  if (argv.includes(' + JSON.stringify(webArgv) + ') || /^next-server \\(v[0-9]/.test((argv[0] ?? "").trim())) out.web.push(pid)',
-    '  if (argv.includes(' + JSON.stringify(workerArgv) + ')) out.worker.push(pid)',
-    '}',
-    'process.stdout.write(JSON.stringify(out))',
-  ].join('\n')
+  const helper = await readFile(new URL('./proc-role-scan.mjs', import.meta.url), 'utf8')
+  const script = helper + `
+const out = { supervisor: [], web: [], worker: [] }
+for (const proc of listProcRoles()) {
+  if (proc.supervisor) out.supervisor.push(proc.pid)
+  if (proc.web) out.web.push(proc.pid)
+  if (proc.worker) out.worker.push(proc.pid)
+}
+process.stdout.write(JSON.stringify(out))
+`
   const listed = await docker(['exec', containerName, 'node', '--input-type=module', '-e', script])
   return JSON.parse(listed.stdout)
 }

@@ -9,13 +9,13 @@ test('isolated runner probe', async () => {
   assert.ok(outputPath)
   const { getDatabasePath } = await import('../../lib/db/database-path')
   const { getKnowledgeStorageRoot } = await import('../../lib/knowledge-storage')
-  const { reportStorageRoot } = await import('../../lib/documents/report-storage')
+  const { getReportStorageRoot } = await import('../../lib/documents/report-storage')
   await writeFile(outputPath, JSON.stringify({
     cwd: process.cwd(),
     workspaceRoot: process.env.YANXING_TEST_WORKSPACE_ROOT,
     databasePath: getDatabasePath(),
     knowledgeRoot: getKnowledgeStorageRoot(),
-    reportRoot: reportStorageRoot,
+    reportRoot: getReportStorageRoot(),
     tsconfigPath: process.env.TSX_TSCONFIG_PATH,
     testSourcePath: path.resolve(process.argv[1] ?? fileURLToPath(import.meta.url)),
   }))

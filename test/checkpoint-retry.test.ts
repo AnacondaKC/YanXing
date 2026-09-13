@@ -57,6 +57,17 @@ test('retryOnSqliteBusy aborts the wait without retrying the agent', async () =>
   assert.equal(attempts, 1)
 })
 
+test('pre-aborted checkpoint retries preserve the cancellation sentinel after the first busy result', async () => {
+  const controller = new AbortController()
+  controller.abort()
+  let attempts = 0
+  await assert.rejects(retryOnSqliteBusy(() => {
+    attempts += 1
+    throw new Error('SQLITE_BUSY')
+  }, { signal: controller.signal }), { name: 'Error', message: 'Analysis cancelled' })
+  assert.equal(attempts, 1)
+})
+
 test('isTransientSqliteBusyError ignores lease and cancel errors', () => {
   assert.equal(isTransientSqliteBusyError(new Error('任务租约已失效，不能完成 AI 调用记录。')), false)
   const busy = new Error('database is locked')

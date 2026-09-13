@@ -129,14 +129,26 @@ function mutationRateLimitForPath(path: string) {
   return defaultMutationRateLimit
 }
 
+function requestHostAndProtocol(request: NextRequest) {
+  if (runtimeConfig.proxy.trustProxy) {
+    return {
+      host: request.headers.get('x-forwarded-host') ?? request.headers.get('host'),
+      protocol: request.headers.get('x-forwarded-proto') ?? request.nextUrl.protocol.replace(':', ''),
+    }
+  }
+  return {
+    host: request.headers.get('host'),
+    protocol: request.nextUrl.protocol.replace(':', ''),
+  }
+}
+
 function isCrossOriginMutation(request: NextRequest) {
   const origin = request.headers.get('origin')
   if (!origin) return false
   try {
     const originUrl = new URL(origin)
-    const requestHost = request.headers.get('x-forwarded-host') ?? request.headers.get('host')
-    const requestProtocol = request.headers.get('x-forwarded-proto') ?? request.nextUrl.protocol.replace(':', '')
-    return originUrl.host !== requestHost || originUrl.protocol !== `${requestProtocol}:`
+    const { host, protocol } = requestHostAndProtocol(request)
+    return originUrl.host !== host || originUrl.protocol !== `${protocol}:`
   } catch {
     return true
   }

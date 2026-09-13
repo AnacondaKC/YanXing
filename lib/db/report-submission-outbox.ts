@@ -7,13 +7,12 @@ export interface SubmissionOutboxEvent {
   reportId: string
   projectId: string
   actorId: string
-  payload: unknown
   attempts: number
   leaseToken: string
 }
 
 interface OutboxRow {
-  id: string; report_id: string; project_id: string; actor_id: string; payload_json: string
+  id: string; report_id: string; project_id: string; actor_id: string
   attempts: number; lease_token: string | null; status: string; lease_expires_at: string | null
 }
 
@@ -88,7 +87,7 @@ export class ReportSubmissionOutbox {
   private event(row: OutboxRow): SubmissionOutboxEvent {
     if (!row.lease_token) throw new Error('Outbox event does not have a lease.')
     return { id: row.id, reportId: row.report_id, projectId: row.project_id, actorId: row.actor_id,
-      payload: JSON.parse(row.payload_json) as unknown, attempts: row.attempts, leaseToken: row.lease_token }
+      attempts: row.attempts, leaseToken: row.lease_token }
   }
 
   private transaction<T>(action: () => T): T {

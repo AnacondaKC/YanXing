@@ -9,7 +9,6 @@ import type { AnalysisArtifactRecord } from '@/modules/contracts/analysis'
 import type { ReportInsightOutput } from '@/modules/insights/domain'
 import { SubmissionTaskError, type SubmissionTask } from '@/modules/reports/submission-task-domain'
 import { IncompleteProviderCallError, type SubmissionTaskPort } from '@/modules/reports/submission-task-ports'
-import { createAnalysisExecutionRepository } from '@/worker/submission-pipeline-repository'
 
 export interface SubmissionExecutorDependencies {
   runModuleAgent?: typeof runAnalysisModuleAgent
@@ -66,11 +65,10 @@ async function executeAnalysisTask(
     assertExplicitSettingsEncryptionKey(frozen.modelRuntime.apiKeyEncrypted)
   }
   const documentText = needsModelCall ? port.getDocumentText(task.reportId) : undefined
-  const repository = createAnalysisExecutionRepository(port, taskId)
   await runAnalysisExecution({
     jobId: taskId,
     reportId: task.reportId,
-    repository,
+    port,
     publisher,
     signal,
     leaseOwner,
@@ -142,7 +140,7 @@ async function executeInsightTask(
     insight: toInsightOutput(generated),
     modelCall,
   })
-  publisher.publish({ jobId: taskId, type: 'completed', message: '洞察已发布。' })
+  publisher.publish('completed')
   return requireTask(port, taskId)
 }
 

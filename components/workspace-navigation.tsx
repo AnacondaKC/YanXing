@@ -3,7 +3,6 @@
 import { BookOpen, FileText, FolderKanban, Layers3, Pin, Plus, Search } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { WorkspaceBrandHeader } from '@/components/workspace-brand'
-import { WorkspaceSidebar } from '@/components/workspace-shell'
 export type NavigationProject = {
   id: string
   title: string
@@ -183,7 +182,7 @@ export function MainNavigationPanel({
     : 'hidden min-h-0 flex-col bg-yx-paper sm:col-start-1 sm:row-start-1 sm:row-span-2 sm:flex sm:border-r sm:border-yx-line'
 
   return (
-    <WorkspaceSidebar aria-label="工作台导航" className={panelClassName}>
+    <aside aria-label="工作台导航" className={panelClassName}>
       <div className="flex w-full shrink-0 justify-center pt-6 pb-2.5">
         <WorkspaceBrandHeader />
       </div>
@@ -305,6 +304,6 @@ export function MainNavigationPanel({
           </button>
         </div>
       </div>
-    </WorkspaceSidebar>
+    </aside>
   )
 }

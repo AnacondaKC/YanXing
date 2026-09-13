@@ -1,12 +1,11 @@
 import { createReportInsightOutput } from '@/lib/ai/report-insight-agent'
 import { createPreparedReportFiles } from '@/lib/documents/prepared-report-files'
-import type { AnalysisJob, AnalysisSnapshot } from '@/modules/analysis/domain'
+import type { AnalysisSnapshot } from '@/modules/analysis/domain'
 import { validateModuleOutput, validatePageAnalysisOutput } from '@/modules/analysis/gates'
 import { pageAnalysisModule } from '@/modules/analysis/modules'
 import type {
   AnalysisCallCheckpoint,
   AnalysisEventPublisher,
-  AnalysisExecutionRepository,
   AnalysisSnapshotWrite,
 } from '@/modules/analysis/ports'
 import { AnalysisStages, type AnalysisArtifactRecord, type AnalysisModuleState, type AnalysisStage } from '@/modules/contracts/analysis'
@@ -166,9 +165,9 @@ export function createSubmissionTaskPort(input: {
   }
 
   const publisher: AnalysisEventPublisher = {
-    publish: (event) => {
+    publish: (type) => {
       try {
-        tasks.recordProgress?.(claim, event.type)
+        tasks.recordProgress?.(claim, type)
       } catch (error) {
         if (!isLeaseLost(error)) throw error
       }
@@ -176,42 +175,6 @@ export function createSubmissionTaskPort(input: {
   }
 
   return { port, publisher }
-}
-
-export function createAnalysisExecutionRepository(port: SubmissionTaskPort, taskId: string): AnalysisExecutionRepository {
-  return {
-    getJob: () => toExecutionJob(port, taskId),
-    getPromptSettings: () => port.getFrozenSnapshots(taskId).prompts,
-    getReportFacts: (reportId) => port.getReportFacts(reportId),
-    getReportSource: (reportId) => port.getReportSource(reportId),
-    getJobEvaluationContext: () => port.getFrozenSnapshots(taskId).evaluationContext,
-    getJobModelRuntime: () => port.getFrozenSnapshots(taskId).modelRuntime,
-    saveReportFacts: (reportId, facts) => port.saveReportFacts(reportId, facts),
-    getDocumentText: (reportId) => port.getDocumentText(reportId),
-    getLatestPartialSnapshotForJob: () => port.getLatestPartialSnapshot(taskId),
-    listAcceptedArtifacts: () => port.listAcceptedArtifacts(taskId),
-    listArtifacts: () => port.listArtifacts(taskId),
-    listModuleStates: () => port.listModuleStates(taskId),
-    saveModuleState: (_jobId, state) => port.saveModuleState(taskId, state),
-    saveArtifact: (_jobId, artifact) => port.saveArtifact(taskId, artifact),
-    saveFailedAttempt: (_jobId, artifact, state) => port.saveFailedAttempt(taskId, artifact, state),
-    markAiCallStarted: (_jobId, details) => port.markAiCallStarted(taskId, details),
-    checkpointAiCall: (input) => port.checkpointAiCall(input),
-    settleCancelledAiCall: (input) => port.settleCancelledAiCall(input),
-    publishFinalSnapshot: (snapshot, finalization) => {
-      if (finalization.status === 'completed' && finalization.publishAsCurrent) {
-        port.publishAnalysis({ snapshot, finalization })
-        return
-      }
-      if (port.isCancellationRequested(taskId)) throw new Error('Analysis cancelled')
-      port.failTask(taskId, 'QUALITY_GATE_FAILED')
-    },
-    updateJob: (_jobId, input) => {
-      const updated = port.updateTask(taskId, { stage: input.stage, stageIndex: input.stageIndex })
-      return updated ? toExecutionJob(port, taskId) : undefined
-    },
-    isCancellationRequested: () => port.isCancellationRequested(taskId),
-  }
 }
 
 function publishBoundAnalysis(tasks: SubmissionTaskStore, claim: SubmissionTaskClaim, publication: SubmissionAnalysisPublication) {
@@ -312,27 +275,6 @@ function listModuleStates(tasks: SubmissionTaskStore, jobId: string): AnalysisMo
     const state = asModuleState(value)
     return state ? [state] : []
   })
-}
-
-function toExecutionJob(port: SubmissionTaskPort, taskId: string): AnalysisJob | undefined {
-  const task = port.getTask(taskId)
-  if (!task) return undefined
-  const ledger = port.getProviderCallLedger(taskId)
-  return {
-    id: task.id,
-    reportVersionId: task.reportId,
-    type: task.operation === 'insight' ? 'insight' : 'initial',
-    status: task.status,
-    stage: coerceStage(task.stage),
-    stageIndex: task.stageIndex,
-    attempts: task.attempts,
-    cancelRequested: task.cancelRequested,
-    aiCallsStarted: ledger.started,
-    aiCallsCompleted: ledger.completed,
-    errorMessage: task.errorCode,
-    createdAt: task.createdAt,
-    updatedAt: task.updatedAt,
-  }
 }
 
 function toAnalysisSnapshot(value: unknown): AnalysisSnapshot | undefined {

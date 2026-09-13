@@ -1,6 +1,7 @@
 import { apiFetch, fetchAllPages, mutationHeaders } from '@/lib/client-request'
 import { editWorkspaceProject, editWorkspaceStages, fetchWorkspaceProject, WorkspaceRequestError } from '@/lib/workspace-submission-client'
-import type { StagePlanEdit, WorkspaceProjectDetail, WorkspaceProjectSafeEdit } from '@/modules/contracts/submission-workspace'
+import type { WorkspaceProjectDetail, WorkspaceProjectSafeEdit } from '@/modules/contracts/submission-workspace'
+import type { StagePlanEdit } from '@/modules/projects/stage-project-contract'
 import { planIsFrozen } from '@/lib/workspace-submission'
 import { PROJECT_FIELD_LIMITS } from '@/modules/projects/validation'
 import { assertValidStagePlan } from '@/modules/projects/stage-domain'

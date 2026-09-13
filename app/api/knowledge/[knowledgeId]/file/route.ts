@@ -1,12 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getRequestSession } from '@/lib/auth/request'
 import { getKnowledgeItem } from '@/lib/db/knowledge-repository'
-import { createReadStream } from 'node:fs'
-import { stat } from 'node:fs/promises'
 import { Readable } from 'node:stream'
 import { extname } from 'node:path'
 import { contentDispositionHeader } from '@/lib/documents/content-disposition'
-import { isManagedKnowledgePath } from '@/lib/knowledge-storage'
+import { isManagedKnowledgePath, openManagedKnowledgeFile } from '@/lib/knowledge-storage'
 import { checkRateLimit } from '@/lib/security/rate-limit'
 import { rateLimitFailure } from '@/lib/http/rate-limit-response'
 
@@ -27,25 +25,30 @@ export async function GET(
   const limited = rateLimitFailure(decision, { error: '文件下载过于频繁，请稍后再试。' })
   if (limited) return NextResponse.json(limited.body, { status: limited.status, headers: limited.headers })
 
+  const opened = await openManagedKnowledgeFile(item.sourcePath)
+  if (!opened.ok) {
+    return NextResponse.json(
+      { error: opened.status === 404 ? '文件不存在。' : '读取文件失败。' },
+      { status: opened.status },
+    )
+  }
   try {
-    // Content-Length 取磁盘实际大小：DB 记录与文件不一致时避免响应截断。
-    const fileStat = await stat(item.sourcePath)
-    if (!fileStat.isFile()) return NextResponse.json({ error: '文件不存在。' }, { status: 404 })
-    const stream = Readable.toWeb(createReadStream(item.sourcePath)) as ReadableStream<Uint8Array>
     const ext = extname(item.fileName).toLowerCase()
     const contentType = ext === '.pdf'
       ? 'application/pdf'
       : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-    return new Response(stream, {
+    const stream = opened.handle.createReadStream({ autoClose: true, signal: request.signal })
+    return new Response(Readable.toWeb(stream) as ReadableStream<Uint8Array>, {
       headers: {
         'Content-Type': contentType,
         'Content-Disposition': contentDispositionHeader(item.fileName, true),
-        'Content-Length': fileStat.size.toString(),
+        'Content-Length': String(opened.size),
         'Cache-Control': 'private, no-store',
         'X-Content-Type-Options': 'nosniff',
       },
     })
   } catch {
+    await opened.handle.close().catch(() => undefined)
     return NextResponse.json({ error: '读取文件失败。' }, { status: 500 })
   }
 }

@@ -2,6 +2,7 @@
 
 import { AlertCircle, FileCode2, Loader2, RotateCcw, Save } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useLatestRequest } from '@/components/use-latest-request'
 import { Button } from '@/components/ui/button'
 import { IconBadge } from '@/components/ui/icon-badge'
 import { apiFetch, mutationHeaders } from '@/lib/client-request'
@@ -57,28 +58,24 @@ export function PromptSettings({ onNotice }: { onNotice: (message: string) => vo
   const draftPromptsRef = useRef(draftPrompts)
   draftSystemRef.current = draftSystem
   draftPromptsRef.current = draftPrompts
-  const loadSequenceRef = useRef(0)
-  const loadControllerRef = useRef<AbortController | undefined>(undefined)
+  const { begin, invalidate } = useLatestRequest()
 
   const load = async () => {
-    const requestSequence = ++loadSequenceRef.current
-    loadControllerRef.current?.abort()
-    const controller = new AbortController()
-    loadControllerRef.current = controller
+    const request = begin()
     setLoading(true)
     setError('')
     try {
-      const response = await apiFetch('/api/admin/prompt-settings', { cache: 'no-store', signal: controller.signal })
+      const response = await apiFetch('/api/admin/prompt-settings', { cache: 'no-store', signal: request.signal })
       const body = await response.json().catch(() => null) as PromptResponse | null
-      if (controller.signal.aborted || requestSequence !== loadSequenceRef.current) return
+      if (!request.isCurrent()) return
       if (!response.ok || !body?.prompts || !body.systemPrompt) throw new Error(body?.error ?? '提示词读取失败。')
       applyResponse(body.systemPrompt, body.prompts, body.revision)
     } catch (cause) {
-      if (controller.signal.aborted || requestSequence !== loadSequenceRef.current) return
+      if (!request.isCurrent()) return
       setError(cause instanceof Error ? cause.message : '提示词读取失败。')
     } finally {
-      if (loadControllerRef.current === controller) loadControllerRef.current = undefined
-      if (!controller.signal.aborted && requestSequence === loadSequenceRef.current) setLoading(false)
+      request.end()
+      if (request.isCurrent()) setLoading(false)
     }
   }
 
@@ -115,10 +112,6 @@ export function PromptSettings({ onNotice }: { onNotice: (message: string) => vo
 
   useEffect(() => {
     void load()
-    return () => {
-      loadSequenceRef.current += 1
-      loadControllerRef.current?.abort()
-    }
   }, [])
 
   const hasChanges = useMemo(() => {
@@ -156,8 +149,7 @@ export function PromptSettings({ onNotice }: { onNotice: (message: string) => vo
         submittedSystem,
         submittedPrompts,
       })
-      loadSequenceRef.current += 1
-      loadControllerRef.current?.abort()
+      invalidate()
       onNotice('提示词已保存，将用于后续新建的分析任务。')
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '提示词保存失败。')
@@ -195,8 +187,7 @@ export function PromptSettings({ onNotice }: { onNotice: (message: string) => vo
         submittedSystem,
         submittedPrompts,
       })
-      loadSequenceRef.current += 1
-      loadControllerRef.current?.abort()
+      invalidate()
       onNotice(scope.scope === 'target' ? '该环节已恢复默认任务提示词。' : scope.scope === 'system' ? '系统提示词已恢复默认。' : '全部提示词已恢复默认。')
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '默认提示词恢复失败。')

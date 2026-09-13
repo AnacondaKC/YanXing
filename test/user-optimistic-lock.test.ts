@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict'
+import crypto from 'node:crypto'
+import { syncBuiltinESMExports } from 'node:module'
 import test from 'node:test'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -212,14 +214,31 @@ test('membership writes bump project updatedAt even when the clock is frozen', (
   }
 })
 
-test('password hashing happens before the write lock so a fast update wins the version', async () => {
+test('password hashing leaves the write lock free and a fast update wins before the hash completes', { timeout: 5_000 }, async (context) => {
   const user = await createManagedUser({
     username: 'lock-hash-user',
     displayName: '哈希用户',
     password: 'password-lock-123',
     role: 'researcher',
   })
-  let listedDuringHash = false
+  const hashStarted = Promise.withResolvers<void>()
+  const releaseHash = Promise.withResolvers<void>()
+  const originalScrypt = crypto.scrypt
+  const mockedScrypt = context.mock.method(crypto, 'scrypt', (
+    password: crypto.BinaryLike, salt: crypto.BinaryLike, keyLength: number,
+    options: crypto.ScryptOptions, callback: (error: Error | null, key: Buffer) => void,
+  ) => {
+    hashStarted.resolve()
+    originalScrypt(password, salt, keyLength, options, (error, key) => {
+      void releaseHash.promise.then(() => callback(error, key))
+    })
+  })
+  syncBuiltinESMExports()
+  context.after(() => {
+    mockedScrypt.mock.restore()
+    syncBuiltinESMExports()
+  })
+  const passwordBefore = getDatabase().prepare('SELECT password_hash FROM users WHERE id = ?').get(user.id)?.password_hash
   const slow = updateManagedUser({
     id: user.id,
     username: user.username,
@@ -229,21 +248,30 @@ test('password hashing happens before the write lock so a fast update wins the v
     status: user.status,
     expectedUpdatedAt: user.updatedAt,
   })
-  await new Promise((resolve) => setImmediate(resolve))
-  listManagedUsers()
-  listedDuringHash = true
-  const fast = updateManagedUser({
-    id: user.id,
-    username: user.username,
-    displayName: '快改名',
-    role: user.role,
-    status: user.status,
-    expectedUpdatedAt: user.updatedAt,
-  })
-  const [slowResult, fastResult] = await Promise.allSettled([slow, fast])
-  assert.equal(listedDuringHash, true)
-  assert.equal(fastResult.status, 'fulfilled')
-  assert.equal(slowResult.status, 'rejected')
-  if (slowResult.status === 'rejected') assert.ok(slowResult.reason instanceof ManagedUserUpdateConflictError)
-  if (fastResult.status === 'fulfilled') assert.equal(fastResult.value?.displayName, '快改名')
+  const slowRejection = assert.rejects(slow, ManagedUserUpdateConflictError)
+  try {
+    await hashStarted.promise
+    assert.ok(listManagedUsers().some((listed) => listed.id === user.id))
+    const writer = new DatabaseSync(databasePath)
+    try {
+      writer.exec('PRAGMA busy_timeout = 1; BEGIN IMMEDIATE; ROLLBACK;')
+    } finally {
+      writer.close()
+    }
+    const fast = await updateManagedUser({
+      id: user.id,
+      username: user.username,
+      displayName: '快改名',
+      role: user.role,
+      status: user.status,
+      expectedUpdatedAt: user.updatedAt,
+    })
+    assert.equal(fast?.displayName, '快改名')
+    assert.equal(getManagedUserById(user.id)?.displayName, '快改名')
+  } finally {
+    releaseHash.resolve()
+    await slowRejection
+  }
+  assert.equal(getManagedUserById(user.id)?.displayName, '快改名')
+  assert.equal(getDatabase().prepare('SELECT password_hash FROM users WHERE id = ?').get(user.id)?.password_hash, passwordBefore)
 })

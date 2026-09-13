@@ -2,6 +2,9 @@ import { createHash, randomBytes, randomUUID, scrypt as scryptAsync, scryptSync,
 import { getDatabase, inImmediateTransaction } from '@/lib/db/client'
 import { runtimeConfig } from '@/lib/config/environment'
 import { nextMonotonicIsoTimestamp } from '@/lib/monotonic-iso-timestamp'
+import type { SessionUser as AuthUser, ManagedUser, UserRole, UserStatus } from '@/modules/users/domain'
+
+export type { AuthUser, ManagedUser, UserRole, UserStatus }
 
 const secureCookiePrefix = runtimeConfig.isProduction ? '__Host-' : ''
 export const sessionCookieName = secureCookiePrefix + 'yanxing_session'
@@ -13,25 +16,6 @@ const scryptParallelization = 1
 const scryptKeyLength = 64
 const scryptMaxMemory = 64 * 1024 * 1024
 const SQLITE_FOREIGN_KEY_CONSTRAINT = 787
-
-export type UserRole = 'admin' | 'researcher'
-
-export interface AuthUser {
-  id: string
-  username: string
-  displayName: string
-  role: UserRole
-  avatar?: string
-}
-
-export type UserStatus = 'active' | 'disabled'
-
-export interface ManagedUser extends AuthUser {
-  status: UserStatus
-  createdAt: string
-  updatedAt: string
-  lastLoginAt?: string
-}
 
 export interface AuthSession {
   id: string

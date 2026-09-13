@@ -1,3 +1,4 @@
+import { setTimeout as wait } from 'node:timers/promises'
 import { randomUUID } from 'node:crypto'
 import { PromptBudgetError } from '@/lib/ai/prompt-budget'
 import { runAnalysisModuleAgent } from '@/lib/ai/restricted-analysis-agent'
@@ -7,17 +8,18 @@ import { createModelRuntime, getRetryAfterMs, isRetryableModelError } from '@/li
 import { validateModuleOutput, validatePageAnalysisOutput } from '@/modules/analysis/gates'
 import { pageAnalysisModule } from '@/modules/analysis/modules'
 import { normalizePageMindMapPayload } from '@/modules/analysis/mind-map'
+import { buildPageAnalysisTaskPrompt } from '@/modules/analysis/prompt'
 import { buildVisualizationWordCloudItems, completeWordCloudOutput } from '@/modules/analysis/word-cloud'
-import type { AnalysisModuleContext } from '@/modules/analysis/module'
-import { AnalysisLeaseLostError, type AnalysisCallCheckpoint, type AnalysisEventPublisher, type AnalysisExecutionRepository, type AnalysisFinalization, type AnalysisSnapshotWrite } from '@/modules/analysis/ports'
-import type { AnalysisJob, AnalysisSnapshot } from '@/modules/analysis/domain'
+import { AnalysisLeaseLostError, type AnalysisCallCheckpoint, type AnalysisEventPublisher, type AnalysisFinalization, type AnalysisSnapshotWrite } from '@/modules/analysis/ports'
+import type { AnalysisSnapshot } from '@/modules/analysis/domain'
 import type { ExtractedDocumentText } from '@/lib/documents/document-parser'
+import type { SubmissionTaskPort } from '@/modules/reports/submission-task-ports'
 import { ANALYSIS_SNAPSHOT_SCHEMA_VERSION, AiScoreDimensions, AnalysisStages, MAX_AI_SUGGESTIONS, MAX_MINDMAP_CHILDREN, MAX_MINDMAP_NODES, RESEARCH_METHODS, ReportCompletenessDimensions, type AiScore, type AnalysisArtifactRecord, type AnalysisModuleId, type AnalysisModuleState, type AnalysisPromptConfig, type AnalysisSnapshotPayload, type AnalysisStage, type AnalysisTrackedModuleId, type GateError, type PageAnalysisArtifact, type PageAnalysisMindMapNode, type ReportCompletenessArtifact, type ReportFacts, type VisualizationArtifact } from '@/modules/contracts/analysis'
 
 export interface AnalysisExecutionContext {
   jobId: string
   reportId: string
-  repository: AnalysisExecutionRepository
+  port: SubmissionTaskPort
   publisher: AnalysisEventPublisher
   signal?: AbortSignal
   leaseOwner?: string
@@ -28,41 +30,42 @@ export interface AnalysisExecutionContext {
 
 async function loadAnalysisDocument(context: AnalysisExecutionContext): Promise<ExtractedDocumentText> {
   if (context.documentText) return context.documentText
-  const prepared = context.repository.getDocumentText?.(context.reportId)
+  const prepared = context.port.getDocumentText(context.reportId)
   if (prepared?.text) return prepared
   throw new Error('报告正文不存在，无法提交给 AI。')
 }
 
 export async function runAnalysisExecution(context: AnalysisExecutionContext): Promise<AnalysisSnapshot> {
-  const job = context.repository.getJob(context.jobId)
-  if (!job) throw new Error('分析任务或报告版本不存在。')
-  let facts = context.repository.getReportFacts(context.reportId)
-  const reportSource = context.repository.getReportSource(context.reportId)
+  const task = context.port.getTask(context.jobId)
+  if (!task) throw new Error('分析任务或报告版本不存在。')
+  let facts = context.port.getReportFacts(context.reportId)
+  const reportSource = context.port.getReportSource(context.reportId)
   if (!reportSource) throw new Error('报告原始文件不存在，无法提交给 AI。')
-  const evaluationContext = context.repository.getJobEvaluationContext(context.jobId)
-  const frozenPromptSettings = context.repository.getPromptSettings(context.jobId)
+  const frozen = context.port.getFrozenSnapshots(context.jobId)
+  const evaluationContext = frozen.evaluationContext
+  const frozenPromptSettings = frozen.prompts
   if (!frozenPromptSettings?.length) throw new Error('任务缺少冻结的提示词配置。')
   const promptSettings = new Map<AnalysisTrackedModuleId, AnalysisPromptConfig>(frozenPromptSettings.map((prompt) => [prompt.target, prompt] as const))
   const definition = pageAnalysisModule
   const pagePrompt = getPromptConfig(promptSettings, definition.id)
-  const persistedArtifacts = context.repository.listArtifacts(context.jobId)
-  const persistedModuleStates = new Map(context.repository.listModuleStates(context.jobId).map((state) => [state.moduleId, state] as const))
-  const accepted = new Map<'page_analysis', AnalysisArtifactRecord>(context.repository.listAcceptedArtifacts(context.jobId).filter((artifact) => artifact.moduleId === 'page_analysis' && definition.schemaVersion === artifact.schemaVersion && artifact.promptVersion === artifactPromptVersion(definition, pagePrompt)).map((artifact) => ['page_analysis' as const, artifact]))
-  const latestPartial = context.repository.getLatestPartialSnapshotForJob(context.jobId)
-  const modelCalls = recoverModelCalls(job, persistedArtifacts, latestPartial?.modelCalls ?? [])
-  updateStage(context, 'validating', '正在检查文件并提取报告正文。')
+  const persistedArtifacts = context.port.listArtifacts(context.jobId)
+  const persistedModuleStates = new Map(context.port.listModuleStates(context.jobId).map((state) => [state.moduleId, state] as const))
+  const accepted = new Map<'page_analysis', AnalysisArtifactRecord>(context.port.listAcceptedArtifacts(context.jobId).filter((artifact) => artifact.moduleId === 'page_analysis' && definition.schemaVersion === artifact.schemaVersion && artifact.promptVersion === artifactPromptVersion(definition, pagePrompt)).map((artifact) => ['page_analysis' as const, artifact]))
+  const latestPartial = context.port.getLatestPartialSnapshot(context.jobId)
+  const modelCalls = recoverModelCalls(context.port.getProviderCallLedger(context.jobId).completed, persistedArtifacts, latestPartial?.modelCalls ?? [])
+  updateStage(context, 'validating')
   const needsModelCall = !accepted.has('page_analysis')
   const extractedDocument = needsModelCall ? await loadAnalysisDocument(context) : undefined
   if (extractedDocument) {
     facts = buildReportFactsFromExtractedDocument(facts, extractedDocument)
-    if (!context.repository.saveReportFacts(context.reportId, facts)) throw new Error('报告本地事实保存失败。')
+    if (!context.port.saveReportFacts(context.reportId, facts)) throw new Error('报告本地事实保存失败。')
   }
-  safePublish(context, { jobId: context.jobId, type: 'info', stage: 'validating', message: needsModelCall ? '报告文件已提取为纯文本，开始生成分析页。' : '已恢复通过门禁的分析页产物，准备发布。' })
+  safePublish(context, 'info')
   if (needsModelCall) {
     const createRuntime = context.createRuntime ?? createModelRuntime
-    const modelRuntime = createRuntime('page_analysis', context.repository.getJobModelRuntime(context.jobId))
+    const modelRuntime = createRuntime('page_analysis', frozen.modelRuntime)
     if (!modelRuntime) throw new Error('分析页未解析到模型配置。')
-    updateStage(context, 'page_analysis', '正在生成分析页。')
+    updateStage(context, 'page_analysis')
     const persistedState = persistedModuleStates.get('page_analysis')
     const lastFailedArtifact = persistedArtifacts.filter((artifact) => artifact.moduleId === 'page_analysis' && artifact.status === 'failed').sort((left, right) => right.attempt - left.attempt)[0]
     // running/retrying state 只表示即将执行该 attempt，不能视为已消费的重试次数；只有失败 artifact 才能安全恢复计数。
@@ -70,23 +73,27 @@ export async function runAnalysisExecution(context: AnalysisExecutionContext): P
     let previousErrors: GateError[] = lastFailedArtifact?.gateErrors ?? persistedState?.gateErrors ?? []
     if (completedAttempts >= definition.maxAttempts) {
       saveModuleState(context, { moduleId: 'page_analysis', status: 'failed', attempt: completedAttempts, maxAttempts: definition.maxAttempts, artifactId: lastFailedArtifact?.id, gateErrors: previousErrors, updatedAt: now() })
-      safePublish(context, { jobId: context.jobId, type: 'module_failed', stage: 'page_analysis', moduleId: 'page_analysis', message: '分析页已达到最大重试次数。', errors: previousErrors })
+      safePublish(context, 'module_failed')
     } else {
       saveModuleState(context, { moduleId: 'page_analysis', status: 'running', attempt: completedAttempts, maxAttempts: definition.maxAttempts, gateErrors: [], updatedAt: now() })
-      safePublish(context, { jobId: context.jobId, type: 'module_started', stage: 'page_analysis', moduleId: 'page_analysis', message: '开始生成分析页。' })
+      safePublish(context, 'module_started')
       for (let attempt = completedAttempts + 1; attempt <= definition.maxAttempts; attempt += 1) {
         throwIfCancelled(context)
         let aiCallStartedForAttempt = false
-        const moduleContext: AnalysisModuleContext & { attempt: number; previousErrors: GateError[] } = { jobId: context.jobId, reportVersionId: context.reportId, reportFacts: facts, reportSource, evaluationContext, maxContextCharacters: modelRuntime.maxContextCharacters, promptConfig: pagePrompt, attempt, previousErrors }
         saveModuleState(context, { moduleId: 'page_analysis', status: attempt === 1 ? 'running' : 'retrying', attempt, maxAttempts: definition.maxAttempts, gateErrors: previousErrors, updatedAt: now() })
-        if (attempt > 1) safePublish(context, { jobId: context.jobId, type: 'module_retrying', stage: 'page_analysis', moduleId: 'page_analysis', message: `分析页根据门禁错误重新生成第 ${attempt} 次。`, errors: previousErrors })
+        if (attempt > 1) safePublish(context, 'module_retrying')
         throwIfCancelled(context)
         const runAgent = context.runModuleAgent ?? runAnalysisModuleAgent
         let generated: Awaited<ReturnType<typeof runAnalysisModuleAgent>>
         try {
           generated = await runAgent({
             moduleId: 'page_analysis',
-            prompt: definition.buildPrompt(moduleContext),
+            prompt: buildPageAnalysisTaskPrompt({
+              instructionPrompt: pagePrompt.instructionPrompt,
+              reportFacts: facts,
+              evaluationContext,
+              previousErrors,
+            }),
             promptConfig: pagePrompt,
             schema: definition.schema,
             documentText: extractedDocument?.text ?? '',
@@ -94,7 +101,7 @@ export async function runAnalysisExecution(context: AnalysisExecutionContext): P
             signal: context.signal,
             runtime: modelRuntime,
             onCallStarted: (details) => {
-              context.repository.markAiCallStarted(context.jobId, { ...details, stage: 'page_analysis', module: 'page_analysis', attempt })
+              context.port.markAiCallStarted(context.jobId, { ...details, stage: 'page_analysis', module: 'page_analysis', attempt })
               aiCallStartedForAttempt = true
             },
           })
@@ -108,7 +115,7 @@ export async function runAnalysisExecution(context: AnalysisExecutionContext): P
             modelCalls.push(toSnapshotModelCall(completed))
             await checkpointCompletedAttempt(context, facts, accepted, modelCalls, completed, failedArtifact, failedState)
             throwIfCancelled(context)
-            safePublish(context, { jobId: context.jobId, type: 'module_failed', stage: 'page_analysis', moduleId: 'page_analysis', message: '分析页执行失败。', errors })
+            safePublish(context, 'module_failed')
             break
           }
           throwIfCancelled(context)
@@ -117,11 +124,11 @@ export async function runAnalysisExecution(context: AnalysisExecutionContext): P
           const failedArtifact = createFailedArtifact(context, definition, pagePrompt, attempt, errors, modelRuntime.primary.provider, modelRuntime.primary.id, { error: errors[0]?.message ?? '模型调用失败。' })
           const exhausted = aiCallStartedForAttempt || attempt === definition.maxAttempts || !isRetryableModelError(error)
           if (exhausted) {
-            context.repository.saveFailedAttempt(context.jobId, failedArtifact, { moduleId: 'page_analysis', status: 'failed', attempt, maxAttempts: definition.maxAttempts, artifactId: failedArtifact.id, gateErrors: errors, updatedAt: now() })
-            safePublish(context, { jobId: context.jobId, type: 'module_failed', stage: 'page_analysis', moduleId: 'page_analysis', message: '分析页执行失败。', errors })
+            context.port.saveFailedAttempt(context.jobId, failedArtifact, { moduleId: 'page_analysis', status: 'failed', attempt, maxAttempts: definition.maxAttempts, artifactId: failedArtifact.id, gateErrors: errors, updatedAt: now() })
+            safePublish(context, 'module_failed')
             break
           }
-          context.repository.saveArtifact(context.jobId, failedArtifact)
+          context.port.saveArtifact(context.jobId, failedArtifact)
           await retryDelay(attempt, getRetryAfterMs(error), context.signal)
           continue
         }
@@ -130,7 +137,7 @@ export async function runAnalysisExecution(context: AnalysisExecutionContext): P
         try {
           throwIfCancelled(context)
           saveModuleState(context, { moduleId: 'page_analysis', status: 'gating', attempt, maxAttempts: definition.maxAttempts, gateErrors: [], updatedAt: now() })
-          safePublish(context, { jobId: context.jobId, type: 'module_gating', stage: 'page_analysis', moduleId: 'page_analysis', message: '正在校验并修正分析页格式。' })
+          safePublish(context, 'module_gating')
           const evaluated = evaluatePageAnalysisOutput(definition, generated.payload, extractedDocument?.text ?? '')
           if ('error' in evaluated) {
             const errors = toOutputFailureErrors(evaluated.error)
@@ -138,7 +145,7 @@ export async function runAnalysisExecution(context: AnalysisExecutionContext): P
             const failedArtifact = createFailedArtifact(context, definition, pagePrompt, attempt, errors, generated.provider, generated.model, boundedFailedPayload(generated.payload))
             const failedState: AnalysisModuleState = { moduleId: 'page_analysis', status: 'failed', attempt, maxAttempts: definition.maxAttempts, artifactId: failedArtifact.id, gateErrors: errors, updatedAt: now() }
             await checkpointCompletedAttempt(context, facts, accepted, modelCalls, details, failedArtifact, failedState)
-            safePublish(context, { jobId: context.jobId, type: 'module_failed', stage: 'page_analysis', moduleId: 'page_analysis', message: '分析页结果校验失败。', errors })
+            safePublish(context, 'module_failed')
             break
           }
           const { payload: generatedPayload, gate, repairedPaths } = evaluated
@@ -149,7 +156,7 @@ export async function runAnalysisExecution(context: AnalysisExecutionContext): P
             const acceptedState: AnalysisModuleState = { moduleId: 'page_analysis', status: 'accepted', attempt, maxAttempts: definition.maxAttempts, artifactId: acceptedArtifact.id, gateErrors: [], updatedAt: acceptedAt }
             accepted.set('page_analysis', acceptedArtifact)
             await checkpointCompletedAttempt(context, facts, accepted, modelCalls, details, acceptedArtifact, acceptedState)
-            safePublish(context, { jobId: context.jobId, type: 'module_accepted', stage: 'page_analysis', moduleId: 'page_analysis', message: '分析页已通过门禁。' })
+            safePublish(context, 'module_accepted')
             publishPartialSnapshotEvent(context)
             break
           }
@@ -158,7 +165,7 @@ export async function runAnalysisExecution(context: AnalysisExecutionContext): P
           const nextState: AnalysisModuleState = { moduleId: 'page_analysis', status: attempt === definition.maxAttempts ? 'failed' : 'retrying', attempt, maxAttempts: definition.maxAttempts, artifactId: failedArtifact.id, gateErrors: gate.errors, updatedAt: now() }
           await checkpointCompletedAttempt(context, facts, accepted, modelCalls, details, failedArtifact, nextState)
           if (attempt === definition.maxAttempts) {
-            safePublish(context, { jobId: context.jobId, type: 'module_failed', stage: 'page_analysis', moduleId: 'page_analysis', message: '分析页达到最大重试次数，已保留门禁错误。', errors: gate.errors })
+            safePublish(context, 'module_failed')
             break
           }
         } catch (error) {
@@ -191,8 +198,8 @@ function boundedFailedPayload(payload: unknown) {
   return { truncated: true, originalCharacters: serialized.length, preview: serialized.slice(0, maxStoredCharacters) }
 }
 
-function recoverModelCalls(job: Pick<AnalysisJob, 'aiCallsCompleted'>, artifacts: AnalysisArtifactRecord[], existing: AnalysisSnapshot['modelCalls']): AnalysisSnapshot['modelCalls'] {
-  const expectedCalls = Math.max(0, Number(job.aiCallsCompleted ?? 0))
+function recoverModelCalls(completedCalls: number, artifacts: AnalysisArtifactRecord[], existing: AnalysisSnapshot['modelCalls']): AnalysisSnapshot['modelCalls'] {
+  const expectedCalls = Math.max(0, Number(completedCalls ?? 0))
   const normalizedExisting = existing.map((call) => ({
     provider: call.provider,
     model: call.model,
@@ -243,13 +250,7 @@ function evaluatePageAnalysisOutput(definition: typeof pageAnalysisModule, paylo
 
 function reportMindMapRepairs(context: AnalysisExecutionContext, repair: { attempt: number; paths: string[] }) {
   console.info('[analysis:mindmap-normalized]', JSON.stringify({ jobId: context.jobId, attempt: repair.attempt, count: repair.paths.length, paths: repair.paths }))
-  safePublish(context, {
-    jobId: context.jobId,
-    type: 'info',
-    stage: 'page_analysis',
-    moduleId: 'page_analysis',
-    message: `已自动补齐 ${repair.paths.length} 个思维导图叶子节点的空子节点数组，继续校验分析结果。`,
-  })
+  safePublish(context, 'info')
 }
 
 function createFailedArtifact(
@@ -295,11 +296,11 @@ async function checkpointCompletedAttempt(
   try {
     await retryOnSqliteBusy(() => {
       throwIfCancelled(context)
-      context.repository.checkpointAiCall({ jobId: context.jobId, details, artifact, state, snapshot })
+      context.port.checkpointAiCall({ jobId: context.jobId, details, artifact, state, snapshot })
     }, { signal: context.signal })
   } catch (error) {
     if (shouldSettleCancelledCall(context)) {
-      context.repository.settleCancelledAiCall({
+      context.port.settleCancelledAiCall({
         jobId: context.jobId,
         details,
         artifact: toFailedSettlementArtifact(artifact),
@@ -311,14 +312,14 @@ async function checkpointCompletedAttempt(
 }
 
 function replaceModuleState(context: AnalysisExecutionContext, state: AnalysisModuleState): AnalysisModuleState[] {
-  const states = context.repository.listModuleStates(context.jobId)
+  const states = context.port.listModuleStates(context.jobId)
   const index = states.findIndex((candidate) => candidate.moduleId === state.moduleId)
   if (index < 0) return [...states, state]
   return states.map((candidate, candidateIndex) => candidateIndex === index ? state : candidate)
 }
 
 function publishPartialSnapshotEvent(context: AnalysisExecutionContext) {
-  safePublish(context, { jobId: context.jobId, type: 'snapshot_updated', message: '已发布部分分析快照。' })
+  safePublish(context, 'snapshot_updated')
 }
 
 function toModelFailureErrors(error: unknown): GateError[] {
@@ -337,16 +338,22 @@ function toFailureErrors(code: string, error: unknown, expected: string): GateEr
 function publishSnapshot(context: AnalysisExecutionContext, facts: ReportFacts, accepted: Map<AnalysisModuleId, AnalysisArtifactRecord>, modelCalls: AnalysisSnapshot['modelCalls']): AnalysisSnapshot {
   const snapshot = createSnapshotWrite(context, facts, accepted, modelCalls, true)
   const publishAsCurrent = accepted.has('page_analysis')
-  context.repository.publishFinalSnapshot(snapshot, determineFinalization(snapshot.moduleStates, publishAsCurrent))
+  const finalization = determineFinalization(snapshot.moduleStates, publishAsCurrent)
+  if (finalization.status === 'completed' && finalization.publishAsCurrent) {
+    context.port.publishAnalysis({ snapshot, finalization })
+  } else {
+    if (context.port.isCancellationRequested(context.jobId)) throw new Error('Analysis cancelled')
+    context.port.failTask(context.jobId, 'QUALITY_GATE_FAILED')
+  }
   return toAnalysisSnapshot(snapshot)
 }
 
 function finalizeAnalysis(context: AnalysisExecutionContext, facts: ReportFacts, accepted: Map<AnalysisModuleId, AnalysisArtifactRecord>, modelCalls: AnalysisSnapshot['modelCalls']): AnalysisSnapshot {
-  updateStage(context, 'quality_gate', '正在汇总并发布最终分析快照。')
+  updateStage(context, 'quality_gate')
   return publishSnapshot(context, facts, accepted, modelCalls)
 }
 
-function createSnapshotWrite(context: AnalysisExecutionContext, facts: ReportFacts, accepted: Map<AnalysisModuleId, AnalysisArtifactRecord>, modelCalls: AnalysisSnapshot['modelCalls'], final: boolean, moduleStates = context.repository.listModuleStates(context.jobId)): AnalysisSnapshotWrite {
+function createSnapshotWrite(context: AnalysisExecutionContext, facts: ReportFacts, accepted: Map<AnalysisModuleId, AnalysisArtifactRecord>, modelCalls: AnalysisSnapshot['modelCalls'], final: boolean, moduleStates = context.port.listModuleStates(context.jobId)): AnalysisSnapshotWrite {
   const payload = buildSnapshotPayload(facts, accepted)
   return { id: `analysis-${randomUUID()}`, jobId: context.jobId, kind: final ? 'final' : 'partial', reportVersionId: context.reportId, payload, artifacts: Array.from(accepted.values()), moduleStates, modelCalls, schemaVersion: payload.schemaVersion, promptVersion: 'page-analysis-prompts-v1', pipelineVersion: 'page-analysis-pipeline-v1', createdAt: now(), leaseOwner: context.leaseOwner }
 }
@@ -401,16 +408,16 @@ function completePageWordCloudPayload(payload: unknown, documentText: string): u
   return { ...payload, '词云': completed.words }
 }
 
-function saveModuleState(context: AnalysisExecutionContext, state: AnalysisModuleState) { context.repository.saveModuleState(context.jobId, state) }
+function saveModuleState(context: AnalysisExecutionContext, state: AnalysisModuleState) { context.port.saveModuleState(context.jobId, state) }
 
-function updateStage(context: AnalysisExecutionContext, stage: AnalysisStage, message: string) {
+function updateStage(context: AnalysisExecutionContext, stage: AnalysisStage) {
   throwIfCancelled(context)
-  const updated = context.repository.updateJob(context.jobId, { status: 'running', stage, stageIndex: AnalysisStages.indexOf(stage) })
+  const updated = context.port.updateTask(context.jobId, { stage, stageIndex: AnalysisStages.indexOf(stage) })
   if (!updated) throw new Error('任务租约已失效，不能更新分析阶段。')
-  safePublish(context, { jobId: context.jobId, type: 'stage', stage, message })
+  safePublish(context, 'stage')
 }
 
-function throwIfCancelled(context: AnalysisExecutionContext) { if (context.signal?.aborted || context.repository.isCancellationRequested(context.jobId)) throw new Error('Analysis cancelled') }
+function throwIfCancelled(context: AnalysisExecutionContext) { if (context.signal?.aborted || context.port.isCancellationRequested(context.jobId)) throw new Error('Analysis cancelled') }
 
 function getPromptConfig(settings: ReadonlyMap<AnalysisTrackedModuleId, AnalysisPromptConfig>, target: AnalysisTrackedModuleId) { const prompt = settings.get(target); if (!prompt) throw new Error(`缺少 ${target} 模块的提示词配置。`); return prompt }
 
@@ -420,19 +427,19 @@ export async function retryDelay(attempt: number, retryAfterMs = 0, signal?: Abo
   const base = Math.min(10_000, 1_000 * 2 ** Math.max(0, attempt - 1))
   const jitter = Math.floor(Math.random() * 250)
   const milliseconds = Math.max(base, retryAfterMs) + jitter
-  await new Promise<void>((resolve, reject) => {
-    if (signal?.aborted) { reject(new Error('Analysis cancelled')); return }
-    const onAbort = () => { clearTimeout(timer); reject(new Error('Analysis cancelled')) }
-    const timer = setTimeout(() => { signal?.removeEventListener('abort', onAbort); resolve() }, milliseconds)
-    signal?.addEventListener('abort', onAbort, { once: true })
-  })
+  try {
+    await wait(milliseconds, undefined, { signal })
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') throw new Error('Analysis cancelled')
+    throw error
+  }
 }
 
-function safePublish(context: AnalysisExecutionContext, input: Parameters<AnalysisEventPublisher['publish']>[0]) {
+function safePublish(context: AnalysisExecutionContext, type: Parameters<AnalysisEventPublisher['publish']>[0]) {
   try {
-    context.publisher.publish(input)
+    context.publisher.publish(type)
   } catch (error) {
-    if (error instanceof AnalysisLeaseLostError || context.repository.isCancellationRequested(context.jobId)) throw error
+    if (error instanceof AnalysisLeaseLostError || context.port.isCancellationRequested(context.jobId)) throw error
     // 事件仅用于进度通知；核心状态由带租约的持久化操作保证。
   }
 }
@@ -462,8 +469,8 @@ function toFailedSettlementArtifact(artifact: AnalysisArtifactRecord): AnalysisA
 }
 
 function shouldSettleCancelledCall(context: AnalysisExecutionContext) {
-  const job = context.repository.getJob(context.jobId)
-  return Boolean(job && (job.status === 'cancelled' || job.cancelRequested))
+  const task = context.port.getTask(context.jobId)
+  return Boolean(task && (task.status === 'cancelled' || task.cancelRequested))
 }
 
 function isLostLease(error: unknown) {
@@ -477,7 +484,7 @@ function settleCompletedCall(
   artifact: AnalysisArtifactRecord,
 ) {
   try {
-    context.repository.settleCancelledAiCall({ jobId: context.jobId, details, artifact })
+    context.port.settleCancelledAiCall({ jobId: context.jobId, details, artifact })
   } catch (error) {
     const code = error && typeof error === 'object' && 'code' in error ? String((error as { code: unknown }).code) : ''
     if (code === 'CALL_NOT_FOUND' || code === 'CALL_ALREADY_COMPLETED' || code === 'INVALID_CALL_STATE') return

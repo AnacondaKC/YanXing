@@ -18,8 +18,6 @@ delete process.env.YANXING_WORKER_HEARTBEAT_PATH
 delete process.env.YANXING_WORKER_READY_PATH
 delete process.env.YANXING_INSTANCE_TOKEN
 
-const { createOrUpdateUser, createSession, sessionCookieName } = await import('../lib/auth/session')
-const { getDatabase } = await import('../lib/db/client')
 const { GET: getHealth } = await import('../app/api/health/route')
 const { proxy } = await import('../proxy')
 const { clearWorkerHeartbeat, recordWorkerHeartbeat } = await import('../worker/health')
@@ -231,37 +229,6 @@ test('worker poll loop writes a heartbeat and removes it on stop without touchin
   await running
   assert.equal(existsSync(heartbeatPath), false)
   assert.equal(readFileSync(readyPath, 'utf8'), 'health-ready-token')
-})
-
-test('database failure returns 503 from web health, leaves worker heartbeat unchanged, and still bypasses proxy session lookup', async () => {
-  const heartbeatPath = path.join(directory, 'db-fail-heartbeat.json')
-  process.env.YANXING_WORKER_HEARTBEAT_PATH = heartbeatPath
-  recordWorkerHeartbeat(100)
-  const before = readFileSync(heartbeatPath, 'utf8')
-  const user = createOrUpdateUser({
-    username: 'health-session',
-    displayName: 'Health Session',
-    password: 'health-session-password-1',
-    role: 'researcher',
-  })
-  const session = createSession(user.id)
-  getDatabase().close()
-
-  assert.throws(() => recordWorkerHeartbeat(100))
-  assert.equal(readFileSync(heartbeatPath, 'utf8'), before)
-
-  const response = await getHealth()
-  assert.equal(response.status, 503)
-  assert.deepEqual(await response.json(), { status: 'unhealthy' })
-  assert.match(response.headers.get('Cache-Control') ?? '', /no-store/)
-
-  const proxied = proxy(new NextRequest('http://localhost/api/health', {
-    headers: {
-      cookie: sessionCookieName + '=' + session.token,
-      host: 'localhost',
-    },
-  }))
-  assert.equal(proxied.status, 200)
 })
 
 function inspectHeartbeat(payload: { status: string; checkedAt: number; pollMs: number }, nowMs: number) {

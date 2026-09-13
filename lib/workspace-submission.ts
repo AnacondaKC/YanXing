@@ -1,5 +1,3 @@
-import { getSubmissionDisplayLabels } from '@/modules/reports/submission-query'
-import { stageGroupLabel } from '@/modules/reports/workspace-query'
 import type { AiScore } from '@/modules/contracts/analysis'
 import type { ProjectStageRecord } from '@/modules/projects/stage-domain'
 import type { ReportSubmissionCommand } from '@/modules/contracts/report-submission'
@@ -7,7 +5,6 @@ import type { ReportSubmissionKind } from '@/modules/reports/submission-domain'
 import type { SubmissionComparison } from '@/modules/reports/submission-query'
 import type { SubmissionTask } from '@/modules/reports/submission-task-domain'
 import type {
-  WorkspaceConfirmResponse,
   WorkspaceJobAction,
   WorkspaceOutboxDispatch,
   WorkspaceOverviewStats,
@@ -22,12 +19,7 @@ export {
   WORKSPACE_API,
   WORKSPACE_RETIRED_CODES,
   WORKSPACE_RETIRED_PROJECT_FIELDS,
-  isReportSubmissionCommand,
-  isReportSubmissionIdempotencyKey,
-  isStagePlanEdit,
-  isStageProjectCreate,
   isWorkspaceProjectSafeEdit,
-  queryProjection,
 } from '@/modules/contracts/submission-workspace'
 
 export type {
@@ -61,8 +53,6 @@ export type {
   WorkspaceWorkflow,
   WorkspaceRetiredCode,
 } from '@/modules/contracts/submission-workspace'
-
-export { getSubmissionDisplayLabels }
 
 export const SKIPPED_EMPTY_COPY = '已完成 · 跳过，暂无报告'
 const CONFLICT_CODES = new Set([
@@ -266,10 +256,6 @@ export function reduceWorkspaceSubmit(phase: WorkspaceSubmitPhase, event: Worksp
   }
 }
 
-export function formatStageLabel(stage: Pick<ProjectStageRecord, 'ordinal' | 'title'>) {
-  return stageGroupLabel(stage)
-}
-
 export function allowedReportKinds(stage: Pick<ProjectStageRecord, 'lifecycleStatus'>): ReportSubmissionKind[] {
   return stage.lifecycleStatus === 'completed' ? ['completion'] : ['update', 'completion']
 }
@@ -469,16 +455,6 @@ export function beginSubmitConfirm(input: {
   return { step: 'confirm', ...input }
 }
 
-export function beginSubmitCommit(input: {
-  phase: Extract<WorkspaceSubmitPhase, { step: 'prepared' | 'conflict' | 'uncertain' }>
-  command: ReportSubmissionCommand
-  idempotencyKey: string
-}): Extract<WorkspaceSubmitPhase, { step: 'submitting' }> {
-  const next = reduceWorkspaceSubmit(input.phase, { type: 'commit_started', command: input.command, idempotencyKey: input.idempotencyKey })
-  if (next.step !== 'submitting') throw new Error('commit cannot start until tokens are ready or the same request is retried')
-  return next
-}
-
 export function emptyOverviewStats(): WorkspaceOverviewStats {
   return {
     submittedReportCount: 0,
@@ -502,5 +478,3 @@ export function documentSourceFromReport(report: WorkspaceReportCard): Workspace
     submittedAt: report.submittedAt,
   }
 }
-
-export type { WorkspaceConfirmResponse as ConfirmReceipt }

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
@@ -101,4 +101,14 @@ test('legacy database artifact hash covers sqlite and sidecar wal files', async 
   } finally {
     await rm(root, { recursive: true, force: true })
   }
+})
+
+test('P5 role pid listing injects host proc-role-scan without ancestor filtering', async () => {
+  const source = await readFile(new URL('../scripts/p5-package-container.mjs', import.meta.url), 'utf8')
+  assert.match(source, /proc-role-scan\.mjs/)
+  assert.match(source, /'node', '--input-type=module', '-e', script/)
+  const fn = source.slice(source.indexOf('async function listRolePids'), source.indexOf('function assertFreshBoot'))
+  assert.match(fn, /listProcRoles\(\)/)
+  assert.match(fn, /JSON\.stringify\(out\)/)
+  assert.doesNotMatch(fn, /isUnderSupervisor|supervisorPids/)
 })

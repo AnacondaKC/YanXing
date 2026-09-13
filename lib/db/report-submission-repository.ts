@@ -317,19 +317,7 @@ export class ReportSubmissionRepository {
       const outboxEventId = this.newId()
       this.database.prepare(
         "INSERT INTO report_submission_outbox(id, report_id, project_id, actor_id, event_type, payload_json, status, attempts, available_at, created_at) VALUES (?, ?, ?, ?, 'report_submitted', ?, 'pending', 0, ?, ?)",
-      ).run(outboxEventId, report.id, report.projectId, report.submittedBy, JSON.stringify({
-        reportId: report.id,
-        projectId: report.projectId,
-        stageId: report.stageId,
-        stageVersion: report.stageVersion,
-        submissionSequence: report.submissionSequence,
-        submittedAs: report.submittedAs,
-        submittedAt: report.submittedAt,
-        actorId: report.submittedBy,
-        previousCompletionReportId: planned.previousCompletionReportId,
-        events: planned.events,
-        workflow: planned.workflow,
-      }), submittedAt, submittedAt)
+      ).run(outboxEventId, report.id, report.projectId, report.submittedBy, '{}', submittedAt, submittedAt)
       const receipt: ReportSubmissionReceipt = {
         reportId: report.id,
         projectId: report.projectId,

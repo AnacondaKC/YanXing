@@ -1,7 +1,8 @@
 import { apiFetch, fetchAllPages, mutationHeaders } from '@/lib/client-request'
 import { WORKSPACE_API, emptyOverviewStats } from '@/lib/workspace-submission'
 import type { ReportSubmissionCommand } from '@/modules/contracts/report-submission'
-import type { StagePlanEdit, StageProjectCreate, WorkspaceProjectSafeEdit } from '@/modules/contracts/submission-workspace'
+import type { StagePlanEdit, StageProjectCreate } from '@/modules/projects/stage-project-contract'
+import type { WorkspaceProjectSafeEdit } from '@/modules/contracts/submission-workspace'
 import type { KnowledgeItem } from '@/components/workspace-types'
 import type {
   WorkspaceConfirmConflict,
@@ -15,8 +16,6 @@ import type {
   WorkspaceTaskResponse,
   WorkspaceUploadStatus,
 } from '@/lib/workspace-submission'
-
-export { WORKSPACE_API }
 
 export type WorkspaceApiError = {
   status: number

@@ -8,10 +8,10 @@ import { ReportCompletenessCard, ScoreMetricList, ScoreRing } from '../component
 import { EMPTY_SNAPSHOT } from '../lib/analysis-job-progress'
 import { InfoCallout } from '../components/info-callout'
 import { ProjectExecutiveHeader } from '../components/project-executive-header'
+import { ConfirmDialog } from '../components/ui/confirm-dialog'
 import { EmptyState } from '../components/ui/empty-state'
 import { MindMapScanningSkeleton } from '../components/research-visualization-card'
 import { workspaceErrorCopy } from '../lib/workspace-error'
-import type { ProjectWithCapabilities } from '../modules/projects/domain'
 
 test('error fallback renders the workspace recovery copy', () => {
   const html = renderToStaticMarkup(createElement(ErrorFallback, { onRetry() {} }))
@@ -33,7 +33,7 @@ test('empty state uses paper tokens instead of decorative gradients', () => {
 })
 
 test('example project header does not invent collaborator names', () => {
-  const project: ProjectWithCapabilities = {
+  const project = {
     id: 'project-sample',
     ownerId: 'user-1',
     title: '示例课题',
@@ -123,6 +123,28 @@ test('scanning callout types a line of ghost words with a caret', () => {
   assert.match(html, /yx-callout-type__caret/)
   assert.doesNotMatch(html, /yx-suggestion-bar/)
   assert.doesNotMatch(html, /yx-callout-scan/)
+})
+
+test('confirm dialog keeps the summary in the body so the two dividers never touch', () => {
+  const dialog = {
+    title: '确认删除此研报？',
+    titleId: 'delete-knowledge-title',
+    description: '确认删除「附件1.项目技术指标」？此操作无法撤销。',
+    descriptionId: 'delete-knowledge-description',
+    onClose() {},
+    onConfirm() {},
+  }
+  const html = renderToStaticMarkup(createElement(ConfirmDialog, dialog))
+  assert.match(html, /<p id="delete-knowledge-description" class="text-sm leading-6 text-yx-ink-soft">/)
+  assert.doesNotMatch(html, /truncate text-\[10px\]/)
+  assert.equal([...html.matchAll(/此操作无法撤销/g)].length, 1)
+  const body = html.indexOf('<div class="px-5 py-5 space-y-3">')
+  const footer = html.indexOf('border-t border-yx-line bg-yx-surface')
+  assert.ok(body > 0 && body < footer, 'body must sit between the header and footer dividers')
+
+  const bare = { title: '确认删除此研报？', titleId: 't', onClose() {}, onConfirm() {} }
+  assert.doesNotMatch(renderToStaticMarkup(createElement(ConfirmDialog, bare)), /space-y-3/)
+  assert.match(renderToStaticMarkup(createElement(ConfirmDialog, { ...bare, error: '删除失败' })), /space-y-3/)
 })
 
 test('mind map empty-state icon uses three third-layer nodes matching the second layer', () => {

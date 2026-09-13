@@ -4,7 +4,7 @@ import { ArrowUpRight, BookOpen, ChevronDown, ChevronRight, Download, FileText, 
 import { useMemo, useState } from 'react'
 import { CardAura, GroupCardDecoration } from '@/components/ui/card-decoration'
 import { RepositoryLoading, type RepositoryDataState } from '@/components/repository-loading'
-import { useRepositoryEntrance } from '@/components/use-repository-entrance'
+import { useWorkspaceEntrance } from '@/components/use-workspace-entrance'
 import { EmptyState } from '@/components/ui/empty-state'
 import { CellCaption, RepositoryStatCell } from '@/components/ui/repository-stats'
 import { CustomSelect } from '@/components/ui/select'
@@ -36,7 +36,7 @@ export function ReportsRepositoryWorkspace({
   onOpenReport,
   onSelectProject,
 }: ReportsRepositoryWorkspaceProps) {
-  const { entering, finishEntrance } = useRepositoryEntrance(loading)
+  const { entering, finishEntrance } = useWorkspaceEntrance(loading)
   const initialLoading = loading && !hasLoaded
   const dataState: RepositoryDataState = hasLoaded ? 'ready' : loading ? 'loading' : 'error'
   const [search, setSearch] = useState('')

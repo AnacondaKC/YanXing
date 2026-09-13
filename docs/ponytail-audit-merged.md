@@ -3,10 +3,21 @@
 ## 审查边界与计数口径
 
 - 对照当前工作树，复核用户新增的 33 条建议，并与上一轮 12 条清单去重。只审查过度工程和复杂度，不实施代码修改。
-- 本次仅新增审查报告；业务代码、测试和部署配置均未改动。
+- 本轮仅维护审查报告；业务代码、测试和部署配置均未改动。
 - 净删减是扣除替代代码后的保守估算，计入确属死路径的专属测试，不计锁文件、第三方源码、构建产物和本报告。搬移函数或类型不能把原文件全部行数算作删除。
 - “合并”表示静态调用关系及保留现有行为的简化方向已核实，不表示重构已实施或回归已完成。无法证明等价、涉及产品契约变更或收益未经证实的项目不计入净值。
 - 安全、租约/事务、数据恢复、进程归属、日志上限、现有 UI 与交互行为必须保留；不能用更弱的机制换取删行数。
+
+## 前端实施硬约束：视觉与交互质量不退化
+
+- 用户要求的是“不劣化现有外观与交互质量”，不是禁止修改 CSS、SVG 或组件实现。允许等价重构，但本轮不是视觉改版，不擅自改变现有设计语言或交互语义。
+- 布局、间距、排版、配色、边框、阴影、层级、图表细节、文字可读性、响应式适配及各状态的视觉完整度必须保留；不得为删代码移除渐变、光晕、曲线、装饰或动画效果。
+- 鼠标与键盘操作、焦点顺序及还原、Escape/遮罩关闭、选择与反选、滚动位置、加载/错误/禁用反馈、动画节奏与流畅度不得退化；既有无障碍和减少动态效果行为也必须保留。
+- 实施前记录受影响页面的基线：固定浏览器、视口、数据与 UI 状态进行截图，并记录关键交互。实施后在同样条件下比较，包括相关窄屏/宽屏、空数据、单点图表、长文本及加载/错误状态；动画另验证过程，不只看结束帧。
+- M06/M11/M20/M23 等样式与渲染重构，以及 M09/M18 等可能影响状态或 DOM 行为的重构，必须通过对应视觉和交互回归；类型检查和“功能能用”不能替代这一验收。
+- “确认清单”只确认简化方向，不预先批准视觉差异。无法证明符合以上约束的项目不实施；验证出现退化则撤销该项改动或保留原实现，不以“差不多”作为通过标准。
+- 视觉与交互质量优先于减行数和依赖数。允许增加必要的兼容代码、保留依赖、少删甚至不删；随实际结果下调净收益估算，不能为了达成 −796 行/−2 依赖而降低质量。
+- 本次需求澄清不等于授权立即实施重构；当前仍仅更新报告，尚无重构后的视觉验证结果。
 
 ## 验证记录
 
@@ -24,7 +35,7 @@
 | 1 | AnalysisExecutionRepository / 适配器 −130 | 修正后合并 | 接口实际为 21 个方法；getJob 的 ledger 投影、publishFinalSnapshot 的质量失败/取消分支、updateJob 的投影均不是 1:1 转发。pipeline 可直接使用 SubmissionTaskPort，但这些语义必须显式保留。适配层取 −71，连同 #17 保守合计 −75；不是 −130。 | M02 | modules/analysis/ports.ts:65–87；worker/submission-pipeline-repository.ts:181–215,317–336 |
 | 2 | 删除 test-production.mjs −126 | 不采纳 | 零引用和 126 行均属实，但它是独立 CLI：隔离工作区后串起 migrate、create-user、next start、worker、smoke、verify 和 healthcheck。现有 Docker 冒烟及零散脚本不能等价替代裸机端到端生产冒烟；无 npm script 不等于死代码。 | 不计 | scripts/test-production.mjs:9,107–117 |
 | 3 | 七个 argv 解析器 → util.parseArgs −110 | 暂缓整体替换 | 标准库方向有候选价值，但不批准这一批量删减：现有重复参数拒绝、--key=value、缺值、未知参数、错误输出及 help 短路行为并不一致。现场验证：原 worker 对 --help --unknown 提前返回帮助，parseArgs 却报错；--once 重复原先拒绝而原生覆盖；--database=x 原先拒绝而原生接受。3 处较简单解析器可另做保留语义的试改，但尚未证实包装后的净减；备份 CLI 和 create-user 更不能直接替换。 | 不计 | worker/submission-index.ts:10–28；scripts/native-backup.ts:57–119；scripts/create-user.ts:11–35；scripts/p5-package.mjs:27–56；scripts/p5-package-container.mjs:89–113 |
-| 4 | multi-select → CustomSelect searchable −410 | 暂缓，需交互确认 | 当前文件实际为 415 行，唯一调用者确实只保留一个 ownerId；但现组件选择后保持菜单打开、再次点击可清空，CustomSelect 选择后关闭且不能反选。按 AGENTS.md，不能把这两项交互变化视为无问题替换。确认改变交互，或补齐等价能力并重新估算后再合并。 | 不计 | components/ui/multi-select.tsx；components/ui/select.tsx:286–295；components/workspace-project-edit-dialog.tsx:124 |
+| 4 | multi-select → CustomSelect searchable −410 | 暂缓，需交互确认 | 当前文件实际为 415 行，唯一调用者确实只保留一个 ownerId；但现组件选择后保持菜单打开、再次点击可清空，CustomSelect 选择后关闭且不能反选。按 AGENTS.md，不能把这两项交互变化视为无问题替换。本次质量要求不授权改变这两项行为；须先补齐并验证等价能力，再重新估算是否纳入。 | 不计 | components/ui/multi-select.tsx；components/ui/select.tsx:286–295；components/workspace-project-edit-dialog.tsx:124 |
 | 5 | 删除 174 个 export | 暂缓，数量未确认 | 未提供逐符号清单；本轮静态扫描未复现 174/64/110 的口径，且存在命名空间与动态导入。文件内使用、外部导入、专属测试和再导出必须逐名区分；不能批准批量去 export。已核实的具体桥接在下方单独计数。 | 不计 | lib/storage/；lib/db/；modules/reports/；modules/contracts/ |
 | 6 | supervisor → compose 双服务 −600 | 不采纳 | 与已发布的单容器及 docker run --init 契约冲突。当前还保证任一子进程退出时整容器重启、联合健康检查、迁移门禁和共享心跳。拆服务属于部署方案变更，不是等价清理，不能用删掉监督职责计算 −600。 | 不计 | scripts/docker-supervisor.mjs；scripts/docker-entrypoint.sh:12–16；docs/releases/v0.1.2.md:5,11–20,64 |
 | 7 | 旧 Project/Milestone 等六类声明 −30 | 合并，修正估算 | 当前 domain.ts 共 44 行；仅 ProjectMemberRole 仍有生产消费者。其余旧类型只互相引用或被 frontend-ui 测试夹具注解引用，可删除注解并保留夹具行为；保守计 −43。新阶段领域及评价上下文 milestone 不在删除范围内。 | M03 | modules/projects/domain.ts:1–44；test/frontend-ui.test.ts:14,36 |
@@ -112,8 +123,8 @@ M23. **native:** 用少量本地 CSS 替代 tw-animate-css 的两个真实用途
 - ReportInsight、两个 settings 包装、getAiPromptSettingsSnapshot 均已落在 M03/M15；新增同名条目不再加算。decryptChannelApiKey 明确保留。
 - WORKSPACE_API 只删 client 的无用再导出；真正的契约导出保留。p5-release 的旧计划 B5 只是同一发现的历史记录，不是另一份删减收益。
 - Heatmap 只采用 M20 的原生 SVG 方案；与“保留依赖删子节点”的建议互斥。总共只计算两个直接依赖，不推测传递依赖还能删多少。
-- 暂缓 MultiSelect 的约 410 行，直到两项交互变化获确认，或有经验证的等价替代。它不在本次总量内。
+- 暂缓 MultiSelect 的约 410 行；选中后是否关闭和反选行为不得擅自改变。仅在有经验证的等价替代、符合前端质量硬约束并重新估算后才考虑纳入，它不在本次总量内。
 - argv 统一、原生 Dialog、路由迁移、supervisor 拆服务、移除轮转和 TCP 探活替换、174 exports 批量收缩、小文件搬移均未计入。不能把未知行为变化、职责转移或仅移动代码计成安全删减。
-- M05 落地时必须保留存储维护的计数、遗留文件保护和两阶段复查测试；M02/M07/M17 必须保留任务取消、质量门禁和 provider ledger 的行为测试；M06/M09/M20/M23 需要 UI/异步行为回归。
+- M05 落地时必须保留存储维护的计数、遗留文件保护和两阶段复查测试；M02/M07/M17 必须保留任务取消、质量门禁和 provider ledger 的行为测试；M06/M09/M11/M12/M18/M20/M23 需要对应 UI/异步行为回归，并满足前端质量硬约束。
 
 net: -796 lines, -2 deps possible.

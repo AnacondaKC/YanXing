@@ -1,4 +1,4 @@
-import type { HTMLAttributes, ReactNode } from 'react'
+import type { ReactNode } from 'react'
 
 export function WorkspaceTopbar({ brand, tools, className = '' }: { brand?: ReactNode; tools?: ReactNode; className?: string }) {
   return (
@@ -7,10 +7,6 @@ export function WorkspaceTopbar({ brand, tools, className = '' }: { brand?: Reac
       <div className="flex items-center gap-1.5">{tools}</div>
     </header>
   )
-}
-
-export function WorkspaceSidebar({ className = '', children, ...props }: HTMLAttributes<HTMLElement>) {
-  return <aside {...props} className={className}>{children}</aside>
 }
 
 export function WorkspacePageHeader({ children }: { children: ReactNode }) {

@@ -1,7 +1,6 @@
 'use client'
 
 import { hierarchy, Tree } from '@visx/hierarchy'
-import { HeatmapRect } from '@visx/heatmap'
 import { Wordcloud } from '@visx/wordcloud'
 import { Columns2, Grid3X3, Maximize2, Minimize2, Network, Rows2, Tags } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type RefObject } from 'react'
@@ -763,22 +762,11 @@ export function WordCloudPlacedWords({ cloudWords, wordByLabel, onPlaced }: { cl
   )
 }
 
-type HeatmapBin = { row: { id: string; label: string }; cell: HeatmapData['rows'][number]['cells'][number] }
-type HeatmapColumnDatum = { column: HeatmapData['rows'][number]; bins: HeatmapBin[] }
-
 export function HeatmapVisualization({ data, isExpanded }: { data: HeatmapData; isExpanded?: boolean }) {
   const labelWidth = isExpanded ? 90 : 72
   const cellWidth = isExpanded ? 80 : 62
   const headerHeight = 32
   const rowHeight = isExpanded ? 48 : 40
-  const gap = 6
-  const heatmapData = useMemo<HeatmapColumnDatum[]>(() => data.rows.map((row) => ({
-    column: row,
-    bins: RESEARCH_METHODS.map((method) => {
-      const cell = row.cells.find((candidate) => candidate.columnId === method.id) ?? { columnId: method.id, value: 0, ratio: 0 }
-      return { row: { id: method.id, label: method.label }, cell }
-    }),
-  })), [data.rows])
   const width = labelWidth + data.rows.length * cellWidth + 18
   const height = headerHeight + RESEARCH_METHODS.length * rowHeight + 22
   return (
@@ -798,30 +786,18 @@ export function HeatmapVisualization({ data, isExpanded }: { data: HeatmapData; 
             {compactVisualizationLabel(method.label, isExpanded ? 16 : 12)}
           </text>
         })}
-        <HeatmapRect
-          data={heatmapData}
-          xScale={(columnIndex) => labelWidth + columnIndex * cellWidth}
-          yScale={(rowIndex) => headerHeight + rowIndex * rowHeight}
-          binWidth={cellWidth}
-          binHeight={rowHeight}
-          gap={gap}
-          colorScale={(value) => heatmapColor(Math.max(0, Math.min(1, Number(value) / 100)))}
-          bins={(datum) => datum.bins}
-          count={(bin) => bin.cell.value}
-        >
-          {(cells) => cells.flatMap((columnCells) => columnCells.map((cell) => {
-            const section = cell.datum.column
-            const method = cell.bin.row
-            const value = Number(cell.count) || 0
-            return (
-              <g key={`${section.id}-${method.id}`}>
-                <title>{`${section.label} / ${method.label}：${value}% 使用强度`}</title>
-                <rect x={cell.x + 2} y={cell.y + 2} width={Math.max(1, cell.width - 4)} height={Math.max(1, cell.height - 4)} rx="6" fill={cell.color} />
-                <text x={cell.x + cell.width / 2} y={cell.y + cell.height / 2} textAnchor="middle" dominantBaseline="central" fill={value >= 55 ? 'var(--yx-paper)' : 'var(--yx-ink)'} fontSize={isExpanded ? '12' : '10'} fontWeight="700">{value > 0 ? `${value}%` : ''}</text>
-              </g>
-            )
-          }))}
-        </HeatmapRect>
+        {data.rows.map((section, columnIndex) => RESEARCH_METHODS.map((method, rowIndex) => {
+          const value = Number(section.cells.find((candidate) => candidate.columnId === method.id)?.value) || 0
+          const cellX = labelWidth + columnIndex * cellWidth
+          const cellY = headerHeight + rowIndex * rowHeight + 6
+          return (
+            <g key={`${section.id}-${method.id}`}>
+              <title>{`${section.label} / ${method.label}：${value}% 使用强度`}</title>
+              <rect x={cellX + 2} y={cellY + 2} width={Math.max(1, cellWidth - 10)} height={Math.max(1, rowHeight - 10)} rx="6" fill={heatmapColor(Math.max(0, Math.min(1, value / 100)))} />
+              <text x={cellX + (cellWidth - 6) / 2} y={cellY + (rowHeight - 6) / 2} textAnchor="middle" dominantBaseline="central" fill={value >= 55 ? 'var(--yx-paper)' : 'var(--yx-ink)'} fontSize={isExpanded ? '12' : '10'} fontWeight="700">{value > 0 ? `${value}%` : ''}</text>
+            </g>
+          )
+        }))}
         <g transform={`translate(8 ${height - 6})`}>
           <rect x="0" y="-7" width="12" height="8" rx="2" fill={heatmapColor(0.15)} />
           <text x="17" y="0" fill="var(--yx-faint)" fontSize="8">较少</text>

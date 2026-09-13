@@ -8,9 +8,10 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 const projectRoot = fileURLToPath(new URL('../', import.meta.url))
 const testRoot = path.join(projectRoot, 'test')
 const tsconfigPath = path.join(projectRoot, 'tsconfig.source.json')
-const tsxCliPath = fileURLToPath(import.meta.resolve('tsx/cli'))
+const tsxLoader = import.meta.resolve('tsx')
 const forwardedSignals = ['SIGHUP', 'SIGINT', 'SIGTERM']
 const testFilePattern = /\.test\.(?:mjs|ts)$/
+const defaultTestTimeoutMs = 60_000
 const systemDependencies = {
   createWorkspace: async () => {
     const workspaceRoot = await mkdtemp(path.join(tmpdir(), 'yanxing-tests-'))
@@ -54,12 +55,15 @@ export async function runTestCommand({ arguments_: extraArguments = process.argv
   try {
     const { nodeArguments, selectedTestFiles } = await resolveTestArguments(extraArguments)
     const testFiles = selectedTestFiles.length > 0 ? selectedTestFiles : await dependencies.defaultTestFiles()
-    if (testFiles.length === 0) return { code: 0, signal: undefined }
+    if (testFiles.length === 0) {
+      console.error('[test-runner] 发现 0 个测试文件')
+      return { code: 1, signal: undefined }
+    }
     const child = dependencies.spawnProcess(process.execPath, [
-      tsxCliPath,
-      '--tsconfig',
-      tsconfigPath,
+      '--import',
+      tsxLoader,
       '--test',
+      ...defaultTestTimeoutArguments(nodeArguments),
       ...nodeArguments,
       ...testFiles,
     ], {
@@ -87,12 +91,20 @@ export function applyTestOutcome(outcome, runtime = process) {
   runtime.exitCode = outcome.code ?? 1
 }
 
-async function defaultTestFiles() {
+export async function defaultTestFiles() {
+  // Only top-level files are runnable; helpers and intentional-failure fixtures stay opt-in.
   const entries = await readdir(testRoot, { withFileTypes: true })
   return entries
     .filter((entry) => entry.isFile() && testFilePattern.test(entry.name))
     .map((entry) => path.join(testRoot, entry.name))
     .sort()
+}
+
+function defaultTestTimeoutArguments(nodeArguments) {
+  const hasTimeout = nodeArguments.some(
+    (argument) => argument === '--test-timeout' || argument.startsWith('--test-timeout='),
+  )
+  return hasTimeout ? [] : [`--test-timeout=${defaultTestTimeoutMs}`]
 }
 
 async function resolveTestArguments(extraArguments) {

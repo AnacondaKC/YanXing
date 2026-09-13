@@ -82,7 +82,7 @@ export function TopbarUserNav({
           <ChevronDown className={'h-3.5 w-3.5 text-yx-muted transition-transform duration-150 ' + (menuOpen ? 'rotate-180 text-yx-ink' : '')} />
         </button>
         {menuOpen ? (
-          <div role="menu" aria-label="用户与设置菜单" className="absolute right-0 top-full z-50 mt-1.5 w-56 origin-top-right rounded-lg border border-yx-line bg-yx-paper p-1.5 shadow-xl ring-1 ring-black/5 animate-in fade-in zoom-in-95 duration-100">
+          <div role="menu" aria-label="用户与设置菜单" className="absolute right-0 top-full z-50 mt-1.5 w-56 origin-top-right rounded-lg border border-yx-line bg-yx-paper p-1.5 shadow-xl ring-1 ring-black/5 yx-user-menu-enter duration-100">
             <div className="flex items-center gap-2.5 rounded-lg border border-yx-line bg-yx-surface px-2.5 py-2">
               <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-yx-brand text-xs font-bold text-white shadow-2xs">{avatarDisplay}</span>
               <div className="min-w-0 flex-1">

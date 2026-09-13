@@ -7,11 +7,12 @@ import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import test from 'node:test'
-import { applyTestOutcome, runTestCommand } from '../scripts/run-tests.mjs'
+import { applyTestOutcome, defaultTestFiles, runTestCommand } from '../scripts/run-tests.mjs'
 
 const projectRoot = fileURLToPath(new URL('../', import.meta.url))
 const runnerPath = fileURLToPath(new URL('../scripts/run-tests.mjs', import.meta.url))
 const probePath = fileURLToPath(new URL('./fixtures/run-tests-probe.test.ts', import.meta.url))
+const testRoot = path.join(projectRoot, 'test')
 
 class FakeChild extends EventEmitter {
   killedWith = []
@@ -20,6 +21,15 @@ class FakeChild extends EventEmitter {
     this.killedWith.push(signal)
     return true
   }
+}
+
+function spawnRunner(args, env = {}, timeout = 30_000) {
+  return spawnSync(process.execPath, [runnerPath, ...args], {
+    cwd: projectRoot,
+    encoding: 'utf8',
+    env: { ...process.env, ...env },
+    timeout,
+  })
 }
 
 test('test runner isolates real child paths and preserves repository storage sentinels', async () => {
@@ -38,21 +48,14 @@ test('test runner isolates real child paths and preserves repository storage sen
   await writeFile(inheritedKnowledgeSentinel, 'host-knowledge-sentinel', { flag: 'wx' })
 
   try {
-    const result = spawnSync(process.execPath, [
-      runnerPath,
+    const result = spawnRunner([
       '--test-name-pattern=isolated runner probe',
       '--test-concurrency=1',
       probePath,
     ], {
-      cwd: projectRoot,
-      encoding: 'utf8',
-      env: {
-        ...process.env,
-        YANXING_DATABASE_PATH: inheritedDatabasePath,
-        YANXING_KNOWLEDGE_STORAGE_ROOT: inheritedKnowledgeRoot,
-        YANXING_TEST_PROBE_OUTPUT: probeOutputPath,
-      },
-      timeout: 30_000,
+      YANXING_DATABASE_PATH: inheritedDatabasePath,
+      YANXING_KNOWLEDGE_STORAGE_ROOT: inheritedKnowledgeRoot,
+      YANXING_TEST_PROBE_OUTPUT: probeOutputPath,
     })
 
     assert.equal(result.status, 0, result.stderr || result.stdout)
@@ -148,7 +151,7 @@ test('test runner forwards a signal and reapplies it only after cleanup', async 
   assert.deepEqual(events, ['close', 'cleanup', 'signal:42:SIGTERM'])
 })
 
-test('test runner keeps an empty test set green without spawning a child', async () => {
+test('test runner fails closed on an empty discovery set without spawning a child', async () => {
   const events = []
   const outcome = await runTestCommand({
     arguments_: [],
@@ -166,11 +169,24 @@ test('test runner keeps an empty test set green without spawning a child', async
     },
   })
 
-  assert.deepEqual(outcome, { code: 0, signal: undefined })
+  assert.deepEqual(outcome, { code: 1, signal: undefined })
   assert.deepEqual(events, ['workspace', 'cleanup'])
   const runtime = { pid: 1, exitCode: undefined, kill: () => assert.fail('an empty test set must not signal') }
   applyTestOutcome(outcome, runtime)
-  assert.equal(runtime.exitCode, 0)
+  assert.equal(runtime.exitCode, 1)
+})
+
+test('test runner default discovery stays top-level and excludes fixtures', async () => {
+  const files = await defaultTestFiles()
+  assert.ok(files.length > 0)
+  for (const file of files) {
+    assert.equal(path.dirname(file), testRoot)
+    assert.match(file, /\.test\.(?:mjs|ts)$/)
+    assert.equal(file.includes(`${path.sep}fixtures${path.sep}`), false)
+    assert.equal(file.includes(`${path.sep}helpers${path.sep}`), false)
+  }
+  assert.equal(files.includes(probePath), false)
+  assert.ok(files.includes(path.join(testRoot, 'run-tests.test.mjs')))
 })
 
 test('test runner forwards node arguments and deduplicates selected files', async () => {
@@ -181,6 +197,7 @@ test('test runner forwards node arguments and deduplicates selected files', asyn
   const preloadPath = './test/fixtures/run-tests-native-preload.mjs'
   const outcome = await runTestCommand({
     arguments_: ['--test-name-pattern=forwarded', '--import', preloadPath, 'run-tests.test.mjs', absoluteTestFile],
+    environment: { ...process.env, NODE_TEST_CONTEXT: 'child-v1' },
     dependencies: {
       createWorkspace: async () => '/tmp/yanxing-tests-fake-forward',
       removeWorkspace: async () => {
@@ -199,26 +216,52 @@ test('test runner forwards node arguments and deduplicates selected files', asyn
   assert.deepEqual(outcome, { code: 0, signal: undefined })
   assert.deepEqual(events, ['cleanup'])
   const expectedFile = path.join(projectRoot, 'test', 'run-tests.test.mjs')
+  const tsxLoader = import.meta.resolve('tsx')
   assert.equal(invocation.command, process.execPath)
-  assert.equal(invocation.args[0], fileURLToPath(import.meta.resolve('tsx/cli')))
-  assert.deepEqual(invocation.args.slice(1, 3), ['--tsconfig', path.join(projectRoot, 'tsconfig.source.json')])
-  assert.ok(invocation.args.includes('--test'))
-  const nodeArgumentsStart = invocation.args.indexOf('--test') + 1
+  assert.deepEqual(invocation.args.slice(0, 3), ['--import', tsxLoader, '--test'])
+  assert.equal(invocation.args.includes(fileURLToPath(import.meta.resolve('tsx/cli'))), false)
+  assert.equal(invocation.args.includes('--test-force-exit'), false)
   const filesStart = invocation.args.indexOf(expectedFile)
   assert.deepEqual(
-    invocation.args.slice(nodeArgumentsStart, filesStart),
-    ['--test-name-pattern=forwarded', '--import', preloadPath],
+    invocation.args.slice(3, filesStart),
+    ['--test-timeout=60000', '--test-name-pattern=forwarded', '--import', preloadPath],
   )
   assert.equal(invocation.args.at(-1), expectedFile)
   assert.equal(invocation.args.filter((argument) => argument === expectedFile).length, 1)
   assert.equal(invocation.options.cwd, '/tmp/yanxing-tests-fake-forward')
   assert.equal(invocation.options.env.NODE_ENV, 'test')
+  assert.equal(invocation.options.env.TSX_TSCONFIG_PATH, path.join(projectRoot, 'tsconfig.source.json'))
   assert.equal(invocation.options.env.YANXING_DATABASE_PATH, path.join(invocation.options.cwd, 'storage', 'yanxing.sqlite'))
   assert.equal(invocation.options.env.YANXING_TEST_WORKSPACE_ROOT, invocation.options.cwd)
   assert.equal(invocation.options.env.TMPDIR, path.join(invocation.options.cwd, 'tmp'))
+  assert.equal(Object.hasOwn(invocation.options.env, 'NODE_TEST_CONTEXT'), false)
   assert.equal(invocation.options.shell, false)
   assert.equal(invocation.options.stdio, 'inherit')
   assert.equal(signalSource.listenerCount('SIGTERM'), 0)
+})
+
+test('test runner forwards an explicit test timeout instead of the default', async () => {
+  let invocation
+  const outcome = await runTestCommand({
+    arguments_: ['--test-timeout=120000', 'run-tests.test.mjs'],
+    dependencies: {
+      createWorkspace: async () => '/tmp/yanxing-tests-fake-timeout',
+      removeWorkspace: async () => {},
+      spawnProcess: (command, args) => {
+        invocation = { command, args }
+        const spawned = new FakeChild()
+        queueMicrotask(() => spawned.emit('close', 0, null))
+        return spawned
+      },
+      signalSource: new EventEmitter(),
+    },
+  })
+
+  assert.deepEqual(outcome, { code: 0, signal: undefined })
+  assert.deepEqual(
+    invocation.args.filter((argument) => argument === '--test-timeout' || argument.startsWith('--test-timeout=')),
+    ['--test-timeout=120000'],
+  )
 })
 
 test('test runner rejects tsconfig overrides and still cleans the workspace', async () => {
@@ -272,4 +315,51 @@ test('test runner cleans up and releases listeners when the child fails to start
   assert.equal(signalSource.listenerCount('SIGHUP'), 0)
   assert.equal(signalSource.listenerCount('SIGINT'), 0)
   assert.equal(signalSource.listenerCount('SIGTERM'), 0)
+})
+
+test('test runner nested isolation works with a long TMPDIR', async () => {
+  const longRoot = await mkdtemp(path.join(tmpdir(), `${'y'.repeat(80)}-`))
+  const probeOutputPath = path.join(longRoot, 'probe.json')
+  try {
+    const result = spawnRunner([
+      '--test-name-pattern=isolated runner probe',
+      '--test-concurrency=1',
+      probePath,
+    ], {
+      TMPDIR: longRoot,
+      TEMP: longRoot,
+      TMP: longRoot,
+      YANXING_TEST_PROBE_OUTPUT: probeOutputPath,
+    })
+
+    assert.equal(result.status, 0, result.stderr || result.stdout)
+    assert.doesNotMatch(result.stderr, /listen EINVAL/)
+    const probe = JSON.parse(await readFile(probeOutputPath, 'utf8'))
+    assert.equal(probe.tsconfigPath, path.join(projectRoot, 'tsconfig.source.json'))
+    assert.equal(probe.testSourcePath, probePath)
+    assert.equal(probe.cwd.startsWith(longRoot), true)
+    await assert.rejects(access(probe.cwd), { code: 'ENOENT' })
+  } finally {
+    await rm(longRoot, { recursive: true, force: true })
+  }
+})
+
+test('test runner keeps Node empty name-filter semantics without inventing a reporter', async () => {
+  const outerDirectory = await mkdtemp(path.join(tmpdir(), 'yanxing-runner-filter-'))
+  try {
+    const result = spawnRunner([
+      '--test-name-pattern=__audit_no_test_should_match__',
+      '--test-concurrency=1',
+      probePath,
+    ], {
+      YANXING_TEST_PROBE_OUTPUT: path.join(outerDirectory, 'unused-probe.json'),
+    })
+
+    assert.equal(result.status, 0, result.stderr || result.stdout)
+    assert.match(result.stdout, /tests 1/)
+    assert.match(result.stdout, /pass 1/)
+    assert.match(result.stdout, /fail 0/)
+  } finally {
+    await rm(outerDirectory, { recursive: true, force: true })
+  }
 })

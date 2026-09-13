@@ -22,6 +22,10 @@ test('Docker and environment examples use the same Node and pnpm baseline', asyn
   const dockerfile = await readProjectFile('Dockerfile')
   assert.ok(dockerfile.includes(`ARG NODE_IMAGE=${image}`))
   assert.ok(dockerfile.includes(`npm install --global pnpm@${pnpmVersion}`))
+  const workflow = await readProjectFile('.github/workflows/ci.yml')
+  const roleTests = await readProjectFile('test/proc-role-scan.test.mjs')
+  assert.ok(workflow.includes('docker pull ' + image), 'CI must prepare the pinned Node image')
+  assert.ok(roleTests.includes("const NODE_IMAGE = '" + image + "'"), 'container role tests must use the repository Node baseline')
   for (const file of ['compose.yaml', '.env.example', 'docs/docker-deployment.md']) {
     assert.ok((await readProjectFile(file)).includes(image), file)
   }
@@ -50,13 +54,15 @@ test('Docker deployment exposes one supervised app with image-level combined hea
   const dockerfile = await readProjectFile('Dockerfile')
   assert.match(dockerfile, /HEALTHCHECK --interval=15s --timeout=10s --start-period=60s --retries=3/)
   assert.ok(dockerfile.includes('CMD ["node", "/app/scripts/docker-healthcheck.mjs"]'))
+  const dockerignore = await readProjectFile('.dockerignore')
+  assert.ok(dockerignore.includes('\nscripts/p5-contention-benchmark.ts\n'), 'host-only benchmark cannot enter a context that excludes its test fixtures')
   assert.match(dockerfile, /CMD \[\]\s*$/)
   assert.match(dockerfile, /YANXING_WORKER_HEARTBEAT_PATH=\/tmp\/yanxing-worker-heartbeat.json/)
 })
 
 test('CI reads the repository Node baseline and packageManager without publishing images', async () => {
   const workflow = await readProjectFile('.github/workflows/ci.yml')
-  assert.equal((workflow.match(/node-version-file: \.nvmrc/g) ?? []).length, 2)
+  assert.equal((workflow.match(/node-version-file: \.nvmrc/g) ?? []).length, 3)
   assert.doesNotMatch(workflow, /node-version:/)
   assert.match(workflow, /uses: pnpm\/action-setup@v4/)
   assert.doesNotMatch(workflow, /version: 11(?:\s|$)/)
@@ -65,11 +71,33 @@ test('CI reads the repository Node baseline and packageManager without publishin
   assert.doesNotMatch(workflow, /docker\s+push|push:\s*true|packages:\s*write/)
 })
 
+test('CI prepares and runs behavioral browser and opt-in Docker gates', async () => {
+  const workflow = await readProjectFile('.github/workflows/ci.yml')
+  for (const job of ['verify', 'docker', 'browser']) {
+    const block = workflow.split('  ' + job + ':\n')[1]?.split(/\n  [a-z]+:/)[0]
+    assert.ok(block, 'missing CI job: ' + job)
+    assert.match(block, /timeout-minutes: [1-9][0-9]*/, job)
+    assert.ok(block.includes('ref: ${{ github.sha }}'), job)
+    assert.ok(block.includes('node-version-file: .nvmrc'), job)
+  }
+  assert.equal(packageJson.scripts['test:browser'], 'node test/helpers/native-browser-smoke.mjs --p5 --ponytail')
+  const browser = workflow.split('  browser:\n')[1]
+  for (const command of ['pnpm build:runtime', 'pnpm build\n', 'pnpm test:browser']) assert.ok(browser.includes(command), command)
+  assert.ok(browser.indexOf('pnpm build:runtime') < browser.indexOf('pnpm build\n'))
+  assert.ok(browser.indexOf('pnpm build\n') < browser.indexOf('pnpm test:browser'))
+  assert.ok(browser.includes('YANXING_NEXT_DIST_DIR: .next-browser-ci'))
+  assert.ok(browser.includes('YANXING_BROWSER_ARTIFACTS_ROOT:'))
+  assert.ok(workflow.includes('YANXING_TEST_IMAGE: yanxing:ci-test'))
+  assert.ok(workflow.includes('YANXING_PROC_ROLE_DOCKER_TESTS: "1"'))
+  assert.ok(workflow.includes('pnpm test test/proc-role-scan.test.mjs --test-timeout=480000'))
+  assert.ok(workflow.includes('--test-randomize --test-random-seed=4180762113'))
+})
+
 test('release publishing waits for the reusable CI workflow', async () => {
   const ci = await readProjectFile('.github/workflows/ci.yml')
   const release = await readProjectFile('.github/workflows/docker-release.yml')
   assert.match(ci, /^  workflow_call:/m)
-  assert.equal(ci.split('ref: ${{ github.sha }}').length - 1, 2)
+  assert.equal(ci.split('ref: ${{ github.sha }}').length - 1, 3)
   assert.ok(release.includes('ref: ${{ github.sha }}'))
   assert.match(release, /release:\s+types: \[published\]/)
   assert.match(release, /verify:\s+uses: \.\/\.github\/workflows\/ci\.yml/)

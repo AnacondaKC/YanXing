@@ -3,7 +3,7 @@ import test from 'node:test'
 import { createElement, type ComponentProps } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { InsightEmptyState } from '../components/insight-empty-state'
-import { insightEmptyCopy, insightEmptyKind } from '../lib/insight-empty-state'
+import { insightEmptyCopy } from '../lib/insight-empty-state'
 
 const sampleReport = {
   title: '阶段研究报告',
@@ -58,24 +58,17 @@ function assertRedesignedChrome(html: string) {
 }
 
 test('insight empty copy stays calm and specific to the current gap', () => {
-  assert.equal(insightEmptyKind(false, false), 'missing-report')
-  assert.equal(insightEmptyKind(true, true), 'generating')
-  assert.equal(insightEmptyKind(true, false), 'ready')
+  const missing = insightEmptyCopy({ generating: false })
+  assert.equal(missing.lead, '开启决策洞察')
+  assert.match(missing.description, /决策洞察依据报告全文生成/)
 
-  const missing = insightEmptyCopy('missing-report')
-  assert.match(missing.lead, /洞察/)
-  assert.match(missing.highlight, /上传/)
-  assert.match(missing.action, /上传/)
+  const generating = insightEmptyCopy({ report: sampleReport, generating: true })
+  assert.equal(generating.lead, '正在编排洞察')
+  assert.match(generating.description, /根据报告正文整理报告简页/)
 
-  const generating = insightEmptyCopy('generating')
-  assert.match(generating.status, /生成/)
-  assert.equal(generating.action, '正在生成')
-  assert.match(generating.highlight, /简页/)
-
-  const ready = insightEmptyCopy('ready')
+  const ready = insightEmptyCopy({ report: sampleReport, generating: false })
   assert.equal(ready.lead, '生成报告洞察')
-  assert.match(ready.action, /洞察/)
-  assert.match(ready.highlight, /简页/)
+  assert.match(ready.description, /论点、论据与建议/)
 })
 
 test('ready empty state shows the lead alone with the selected report and brief figure', () => {

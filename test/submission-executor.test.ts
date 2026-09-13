@@ -18,8 +18,9 @@ import {
   type TaskDataWrite,
 } from '../modules/reports/submission-task-ports'
 import { executeSubmissionTask } from '../worker/submission-executor'
-import { createAnalysisExecutionRepository, createSubmissionTaskPort } from '../worker/submission-pipeline-repository'
+import { createSubmissionTaskPort } from '../worker/submission-pipeline-repository'
 import { runAnalysisExecution } from '../modules/analysis/pipeline'
+import { pageAnalysisModule } from '../modules/analysis/modules'
 
 const now = () => new Date().toISOString()
 
@@ -204,6 +205,7 @@ class MemorySubmissionStore implements SubmissionTaskStore {
   results: SubmissionTaskResult[] = []
   lateSettlements: TaskCallReceipt[] = []
   verifyCalls: Array<{ sourceKey: string; fileHash: string; sourceSize: number }> = []
+  progressEvents: string[] = []
   contentJsonWrites = 0
 
   constructor(
@@ -248,12 +250,18 @@ class MemorySubmissionStore implements SubmissionTaskStore {
   saveData(claim: SubmissionTaskClaim, data: TaskDataWrite[]) {
     this.requireLive(claim)
     for (const item of data) {
-      if (item.key.startsWith('artifact:') && this.data.has(item.key)) continue
+      const current = this.data.get(item.key)
+      if (item.key.startsWith('artifact:') && current !== undefined && JSON.stringify(current) !== JSON.stringify(item.value)) {
+        throw new SubmissionTaskError('ARTIFACT_IMMUTABLE', 'ARTIFACT_IMMUTABLE')
+      }
       this.data.set(item.key, item.value)
     }
   }
   beginCall(claim: SubmissionTaskClaim, input: { attempt: number; provider: string; model: string }) {
     this.requireLive(claim)
+    const frozen = this.frozen.modelRuntime
+    if (input.provider !== frozen.channel || input.model !== frozen.modelName) throw new SubmissionTaskError('CALL_MODEL_MISMATCH', 'CALL_MODEL_MISMATCH')
+    if (input.attempt > (this.task.operation === 'analysis' ? pageAnalysisModule.maxAttempts : 1)) throw new SubmissionTaskError('CALL_ATTEMPTS_EXHAUSTED', 'CALL_ATTEMPTS_EXHAUSTED')
     if (this.calls.some((call) => call.state === 'started')) throw new SubmissionTaskError('AI_CALL_INCOMPLETE', '存在未完成的模型调用。')
     this.calls.push({ ...input, state: 'started', leaseToken: claim.leaseToken })
   }
@@ -303,9 +311,14 @@ class MemorySubmissionStore implements SubmissionTaskStore {
     if (this.taskLease !== claim.leaseToken) return true
     return this.task.cancelRequested
   }
-  recordProgress() {}
+  recordProgress(_claim: SubmissionTaskClaim, kind: string) { this.progressEvents.push(kind) }
   seedOpenIntent() { this.calls.push({ attempt: 1, provider: 'chat_completions', model: 'test-model', state: 'started', leaseToken: this.claim.leaseToken }) }
   seedCompletedCall() { this.calls.push({ attempt: 1, provider: 'chat_completions', model: 'test-model', state: 'completed', leaseToken: this.claim.leaseToken }) }
+  seedCompletedCalls(count: number) {
+    for (let attempt = 1; attempt <= count; attempt += 1) {
+      this.calls.push({ attempt, provider: 'chat_completions', model: 'test-model', state: 'completed', leaseToken: this.claim.leaseToken })
+    }
+  }
   seedAcceptedPageAnalysis() {
     const artifact: AnalysisArtifactRecord = {
       id: 'artifact-task-1-page_analysis-1',
@@ -391,6 +404,9 @@ test('analysis success uses frozen runtime, verifies source before provider, and
       runModuleAgent: async (input) => {
         verifiedBeforeAgent = store.verifyCalls.length === 1
         assert.equal(input.documentText, store.document.text)
+        assert.match(input.prompt, /模块：page_analysis/)
+        assert.match(input.prompt, /任务：任务提示/)
+        assert.match(input.prompt, /固定中文键/)
         return fakePageAgent(input)
       },
     },
@@ -403,6 +419,38 @@ test('analysis success uses frozen runtime, verifies source before provider, and
   assert.equal(payload.kind, 'analysis')
   assert.equal(payload.snapshot.payload.aiScore?.previousOverall, undefined)
   assert.equal(store.callLedger(store.task.id).completed, 1)
+  assert.deepEqual(store.progressEvents, [
+    'stage',
+    'info',
+    'stage',
+    'module_started',
+    'module_gating',
+    'module_accepted',
+    'snapshot_updated',
+    'stage',
+  ])
+})
+
+test('analysis publisher errors do not fail a successful job', async () => {
+  const { store, port, publisher } = createHarness('analysis')
+  const publish = publisher.publish.bind(publisher)
+  publisher.publish = (type) => {
+    publish(type)
+    throw new Error('progress fanout failed')
+  }
+  const result = await executeSubmissionTask({
+    taskId: store.task.id,
+    port,
+    publisher,
+    leaseOwner: store.claim.leaseToken,
+    dependencies: {
+      createRuntime: () => testRuntime(),
+      runModuleAgent: (input) => fakePageAgent(input),
+    },
+  })
+  assert.equal(result.status, 'completed')
+  assert.equal(store.results.length, 1)
+  assert.ok(store.progressEvents.includes('module_accepted'))
 })
 
 test('analysis loads repository prepared text when no document is injected', async (context) => {
@@ -411,7 +459,7 @@ test('analysis loads repository prepared text when no document is injected', asy
   await runAnalysisExecution({
     jobId: store.task.id,
     reportId: store.task.reportId,
-    repository: createAnalysisExecutionRepository(port, store.task.id),
+    port,
     publisher,
     createRuntime: () => testRuntime(),
     runModuleAgent: async (input) => {
@@ -427,11 +475,10 @@ test('analysis loads repository prepared text when no document is injected', asy
 test('analysis rejects missing repository text before runtime or provider without reading a source file', async () => {
   for (const prepared of [undefined, { text: '', paragraphCount: 0, characterCount: 0 }]) {
     const { store, port, publisher } = createHarness('analysis')
-    const repository = createAnalysisExecutionRepository(port, store.task.id)
     await assert.rejects(() => runAnalysisExecution({
       jobId: store.task.id,
       reportId: store.task.reportId,
-      repository: { ...repository, getDocumentText: () => prepared },
+      port: { ...port, getDocumentText: () => prepared as SubmissionPreparedDocument },
       publisher,
       createRuntime: () => { throw new Error('missing text must fail before runtime creation') },
       runModuleAgent: async () => { throw new Error('missing text must not call provider') },
@@ -477,6 +524,33 @@ test('quality gate failure checkpoints calls and fails without complete', async 
   assert.equal(result.status, 'failed')
   assert.equal(store.task.errorCode, 'QUALITY_GATE_FAILED')
   assert.equal(store.results.length, 0)
+  assert.equal(store.callLedger(store.task.id).completed, 3)
+})
+
+test('quality gate failure concurrent with cancel is not recorded as ordinary quality failure', async () => {
+  const { store, port, publisher } = createHarness('analysis')
+  const progress = store.progress.bind(store)
+  store.progress = (claim, input) => {
+    const updated = progress(claim, input)
+    if (input.stage === 'quality_gate') store.requestCancel()
+    return updated
+  }
+  await assert.rejects(
+    () => executeSubmissionTask({
+      taskId: store.task.id,
+      port,
+      publisher,
+      dependencies: {
+        createRuntime: () => testRuntime(),
+        runModuleAgent: (input) => fakePageAgent(input, createRejectedPageAnalysis()),
+      },
+    }),
+    (error: unknown) => error instanceof Error && error.message === 'Analysis cancelled',
+  )
+  assert.equal(store.results.length, 0)
+  assert.equal(store.task.errorCode, undefined)
+  assert.notEqual(store.task.status, 'failed')
+  assert.equal(store.task.cancelRequested, true)
   assert.equal(store.callLedger(store.task.id).completed, 3)
 })
 
@@ -526,6 +600,30 @@ test('accepted page analysis checkpoint resumes without provider, document read 
   assert.equal(store.verifyCalls.length, 0)
 })
 
+test('resumed analysis restores model-call budget from ledger.completed not task fields', async () => {
+  const { store, port, publisher } = createHarness('analysis')
+  store.seedCompletedCalls(2)
+  store.seedAcceptedPageAnalysis()
+  Object.assign(store.task, { aiCallsCompleted: 99 })
+  const result = await executeSubmissionTask({
+    taskId: store.task.id,
+    port,
+    publisher,
+    dependencies: {
+      createRuntime: () => { throw new Error('resumed analysis must not decrypt frozen model runtime') },
+      runModuleAgent: async () => { throw new Error('resumed analysis must not call provider') },
+    },
+  })
+  assert.equal(result.status, 'completed')
+  const payload = store.results[0].payload as { snapshot: { modelCalls: Array<{ provider: string; model: string; stage: string; module: string }> } }
+  assert.equal(store.callLedger(store.task.id).completed, 2)
+  assert.equal(payload.snapshot.modelCalls.length, 2)
+  assert.deepEqual(payload.snapshot.modelCalls, [
+    { provider: 'chat_completions', model: 'test-model', stage: 'page_analysis', module: 'page_analysis' },
+    { provider: 'chat_completions', model: 'test-model', stage: 'page_analysis', module: 'page_analysis' },
+  ])
+})
+
 test('insight success prefers prepared document text and publishes normalized insight envelope', async () => {
   const { store, port, publisher } = createHarness('insight')
   const result = await executeSubmissionTask({
@@ -547,6 +645,7 @@ test('insight success prefers prepared document text and publishes normalized in
   assert.equal(payload.kind, 'insight')
   assert.equal(payload.insight.html, createInsightHtml())
   assert.equal(store.verifyCalls.length, 1)
+  assert.deepEqual(store.progressEvents, ['completed'])
 })
 
 test('insight validation failure checkpoints completed calls and does not complete', async () => {

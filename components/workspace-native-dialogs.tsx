@@ -1,9 +1,8 @@
 'use client'
 
 import { useRef, useState } from 'react'
-import { Button } from '@/components/ui/button'
-import { Dialog, DialogBody, DialogFooter, DialogHeader } from '@/components/ui/dialog'
-import { Field, FormError } from '@/components/ui/field'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { Field } from '@/components/ui/field'
 import { Textarea } from '@/components/ui/textarea'
 import { isTaskInFlight, reportDeleteBlocked, type WorkspaceReportCard } from '@/lib/workspace-submission'
 import type { SubmissionTask } from '@/modules/reports/submission-task-domain'
@@ -72,19 +71,21 @@ export function WorkspaceDeleteReportDialog({
   }
 
   return (
-    <Dialog onClose={onClose} labelledBy="delete-report-title">
-      <DialogHeader titleId="delete-report-title" title="删除报告" onClose={onClose} />
-      <DialogBody className="space-y-3">
-        <p className="text-sm leading-6 text-yx-ink-soft">将逻辑删除 {report.labels.reportLabel}。删除后不可通过替换或改挂阶段恢复，必须填写原因。</p>
-        <Field label="删除原因" htmlFor="workspace-delete-report-reason" required>
-          <Textarea id="workspace-delete-report-reason" name="reason" value={reason} onChange={(event) => setReason(event.target.value)} />
-        </Field>
-        <FormError>{blockedMessage || error}</FormError>
-      </DialogBody>
-      <DialogFooter>
-        <Button variant="ghost" disabled={saving} onClick={onClose}>取消</Button>
-        <Button variant="danger" disabled={saving || blocked} onClick={() => void submit()}>确认删除</Button>
-      </DialogFooter>
-    </Dialog>
+    <ConfirmDialog
+      title="删除报告"
+      description={'将逻辑删除 ' + report.labels.reportLabel + '。删除后不可通过替换或改挂阶段恢复，必须填写原因。'}
+      titleId="delete-report-title"
+      descriptionId="delete-report-description"
+      confirmLabel="确认删除"
+      loading={saving}
+      confirmDisabled={blocked}
+      error={blockedMessage || error}
+      onClose={onClose}
+      onConfirm={() => void submit()}
+    >
+      <Field label="删除原因" htmlFor="workspace-delete-report-reason" required>
+        <Textarea id="workspace-delete-report-reason" name="reason" value={reason} onChange={(event) => setReason(event.target.value)} />
+      </Field>
+    </ConfirmDialog>
   )
 }

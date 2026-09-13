@@ -14,6 +14,7 @@ const { getDatabase } = await import('../lib/db/client')
 const { createOrUpdateUser, createSession, sessionCookieName } = await import('../lib/auth/session')
 const { createNativeProject, nativeWorkspace, submitNativeReport } = await import('./helpers/native-project')
 const { GET: streamJobEvents } = await import('../app/api/jobs/[jobId]/events/route')
+const { createJobEventStream } = await import('../lib/http/submission-task-events')
 
 test.after(async () => {
   await rm(directory, { recursive: true, force: true })
@@ -62,13 +63,18 @@ function eventsRequest(jobId: string, token: string, init?: { lastEventId?: stri
   })
 }
 
-async function readSse(response: Response, expectedCount: number) {
+async function readSse(response: Response, expectedCount: number, timeoutMs = 5_000) {
   assert.equal(response.status, 200)
   assert.ok(response.body)
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
   const events: Array<{ id: number; type: string; data: string }> = []
+  let timedOut = false
+  const deadline = setTimeout(() => {
+    timedOut = true
+    void reader.cancel().catch(() => undefined)
+  }, timeoutMs)
   try {
     while (events.length < expectedCount) {
       const chunk = await reader.read()
@@ -84,11 +90,31 @@ async function readSse(response: Response, expectedCount: number) {
         if (idLine) events.push({ id: Number(idLine.slice(4)), type: eventLine?.slice(7) ?? '', data: dataLine?.slice(6) ?? '' })
       }
     }
+    if (timedOut) throw new Error('Timed out waiting for SSE events: received ' + events.length + ' of ' + expectedCount)
+    assert.equal(events.length, expectedCount, 'SSE ended before the expected event count')
   } finally {
-    await reader.cancel()
+    clearTimeout(deadline)
+    try { await reader.cancel() } finally { reader.releaseLock() }
   }
   return events
 }
+
+test('SSE test reader bounds a stalled stream and releases its reader', { timeout: 2_000 }, async () => {
+  let cancellations = 0
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) { controller.enqueue(new TextEncoder().encode(': heartbeat\n\n')) },
+    cancel() { cancellations += 1 },
+  })
+  await assert.rejects(readSse(new Response(stream), 1, 25), /Timed out waiting for SSE events: received 0 of 1/)
+  assert.equal(cancellations, 1)
+  assert.equal(stream.locked, false)
+})
+
+test('SSE test reader rejects an early EOF and releases its reader', async () => {
+  const response = new Response('id: 1\nevent: queued\ndata: {}\n\n')
+  await assert.rejects(readSse(response, 2), /SSE ended before the expected event count/)
+  assert.equal(response.body?.locked, false)
+})
 
 test('native database rejects retired job_events streaming', async () => {
   const database = getDatabase()
@@ -167,3 +193,30 @@ test('cancel releases exactly one connection slot even when abort and body cance
     assert.equal((await streamJobEvents(eventsRequest(jobId,token),{params:Promise.resolve({jobId})})).status,429)
   }finally{await Promise.all(responses.map(response=>response.body?.cancel()))}
 })
+
+for (const preAborted of [false, true]) {
+  test('SSE cancellation does not invoke onError, preAborted=' + preAborted, async () => {
+    const { owner, jobId, token } = createQueuedJob()
+    const errors: unknown[] = []
+    const stream = createJobEventStream({
+      workspace: nativeWorkspace(getDatabase()).workspace,
+      getCurrentUser: () => owner,
+      onError(error) { errors.push(error); return new Response(null, { status: 500 }) },
+    })
+    const controller = new AbortController()
+    if (preAborted) controller.abort()
+    const response = await stream(eventsRequest(jobId, token, { after: lastEventId(jobId), signal: controller.signal }), jobId)
+    if (preAborted) {
+      assert.equal(response.status, 499)
+    } else {
+      assert.equal(response.status, 200)
+      assert.ok(response.body)
+      const reader = response.body.getReader()
+      const pending = reader.read()
+      controller.abort()
+      try { assert.equal((await pending).done, true) }
+      finally { await reader.cancel() }
+    }
+    assert.deepEqual(errors, [])
+  })
+}

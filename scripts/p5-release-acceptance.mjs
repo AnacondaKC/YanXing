@@ -30,23 +30,6 @@ import {
 } from './deployment-smoke.mjs'
 import { runNativeBackupRestoreDrill } from './p5-backup-restore.mjs'
 
-export {
-  NOT_QUIESCENT_MESSAGE,
-  assertTaskProbePreserved,
-  backupLayoutFromIsolated,
-  classifyNativeBackupFailure,
-  inspectIsolatedQuiescence,
-  parseBackupCliJson,
-  preserveRuntimeRootAside,
-  readPublishedRestoreProbe,
-  resolveBackupCli,
-  restoreIncompleteMarkerPath,
-  runNativeBackupRestoreDrill,
-  summarizeTaskProbe,
-  buildNativeBackupCliArgs,
-  RESTORE_INCOMPLETE_MARKER_PREFIX,
-} from './p5-backup-restore.mjs'
-
 const projectRootFromScript = fileURLToPath(new URL('../', import.meta.url))
 const DEFAULT_TIMEOUT_MS = 240_000
 const DEFAULT_POLL_MS = 500

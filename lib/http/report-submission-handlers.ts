@@ -1,6 +1,6 @@
 import type { ReportSubmissionService } from '@/modules/reports/submission-service'
 import { ReportSubmissionError, type ReportUploadRecord } from '@/modules/reports/upload-domain'
-import { StageWorkflowError } from '@/modules/projects/stage-workflow'
+import { StageWorkflowError } from '@/modules/projects/stage-domain'
 import { isReportSubmissionCommand, isReportSubmissionIdempotencyKey } from '@/modules/contracts/report-submission'
 import { StorageQuotaError } from '@/lib/storage/quota'
 

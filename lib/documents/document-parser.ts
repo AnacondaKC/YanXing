@@ -1,6 +1,5 @@
-import { randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
-import { readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { stat } from 'node:fs/promises'
 import { runtimeConfig } from '@/lib/config/environment'
 import { errorCode } from '@/lib/storage/stream-utils'
 import { parserChildSpawnArguments, resolveParserChildRuntime } from './parser-child-runtime'
@@ -16,68 +15,6 @@ const maxPdfParserResultBytes = Math.max(1_048_576, maxExtractedCharacters * 4)
 const docxParseTimeoutMs = runtimeConfig.report.docxParseTimeoutMs
 const docxParserMemoryMb = runtimeConfig.report.docxParserMemoryMb
 const maxDocxParserResultBytes = Math.max(1_048_576, maxExtractedCharacters * 4)
-type SharedAbortableTaskEntry<T> = {
-  promise: Promise<T>
-  controller: AbortController
-  waiters: number
-  completed: boolean
-}
-
-export function createSharedAbortableTaskMap<T>(
-  start: (key: string, signal: AbortSignal) => Promise<T>,
-  label: string,
-) {
-  const pending = new Map<string, SharedAbortableTaskEntry<T>>()
-
-  return {
-    run(key: string, signal?: AbortSignal): Promise<T> {
-      throwIfParserAborted(signal, label)
-      let entry = pending.get(key)
-      if (!entry || entry.completed) {
-        const controller = new AbortController()
-        const created: SharedAbortableTaskEntry<T> = {
-          promise: Promise.resolve() as Promise<T>,
-          controller,
-          waiters: 0,
-          completed: false,
-        }
-        created.promise = start(key, controller.signal).then(
-          (value) => {
-            created.completed = true
-            if (pending.get(key) === created) pending.delete(key)
-            return value
-          },
-          (error: unknown) => {
-            created.completed = true
-            if (pending.get(key) === created) pending.delete(key)
-            throw error
-          },
-        )
-        entry = created
-        pending.set(key, created)
-      }
-
-      entry.waiters += 1
-      let released = false
-      const release = () => {
-        if (released) return
-        released = true
-        entry.waiters -= 1
-        if (entry.waiters === 0 && !entry.completed) entry.controller.abort()
-      }
-      signal?.addEventListener('abort', release, { once: true })
-      return raceWithParserAbort(entry.promise, signal, label).finally(() => {
-        signal?.removeEventListener('abort', release)
-        release()
-      })
-    },
-  }
-}
-
-const pendingCachedDocumentExtractions = createSharedAbortableTaskMap(
-  (filePath, signal) => readOrExtractCachedDocumentText(filePath, signal),
-  '文档',
-)
 
 // 解析并发信号量：mammoth / pdf.js 在解析期会展开压缩流，无界并发。
 // PDF 的实测 RSS 远高于 DOCX，因此使用独立且更保守的并发池。
@@ -177,72 +114,8 @@ export async function extractDocumentText(filePath: string, signal?: AbortSignal
   return /\.pdf$/i.test(filePath) ? extractPdfText(filePath, signal) : extractDocxText(filePath, signal)
 }
 
-/** 报告文件不可变，因此可按源文件路径安全复用已提取的纯文本。 */
-export function extractCachedDocumentText(filePath: string, signal?: AbortSignal): Promise<ExtractedDocumentText> {
-  return pendingCachedDocumentExtractions.run(filePath, signal)
-}
-
-async function readOrExtractCachedDocumentText(filePath: string, signal?: AbortSignal): Promise<ExtractedDocumentText> {
-  const cachePath = `${filePath}.content.json`
-  throwIfParserAborted(signal, '文档')
-  const cached = await readExtractedTextCache(cachePath)
-  if (cached) return cached
-
-  throwIfParserAborted(signal, '文档')
-  const extracted = await extractDocumentText(filePath, signal)
-  throwIfParserAborted(signal, '文档')
-  const temporaryPath = `${cachePath}.${randomUUID()}.tmp`
-  try {
-    await writeFile(temporaryPath, JSON.stringify(extracted), { encoding: 'utf8', mode: 0o600 })
-    await rename(temporaryPath, cachePath)
-  } catch {
-    await rm(temporaryPath, { force: true }).catch(() => undefined)
-  }
-  return extracted
-}
-
 function throwIfParserAborted(signal: AbortSignal | undefined, label: string) {
   if (signal?.aborted) throw new DocumentParseError(`${label} 解析已取消。`)
-}
-
-function raceWithParserAbort<T>(promise: Promise<T>, signal: AbortSignal | undefined, label: string): Promise<T> {
-  if (!signal) return promise
-  if (signal.aborted) return Promise.reject(new DocumentParseError(`${label} 解析已取消。`))
-  return new Promise<T>((resolve, reject) => {
-    let settled = false
-    const cleanup = () => signal.removeEventListener('abort', onAbort)
-    const finish = (callback: () => void) => {
-      if (settled) return
-      settled = true
-      cleanup()
-      callback()
-    }
-    const onAbort = () => finish(() => reject(new DocumentParseError(`${label} 解析已取消。`)))
-
-    signal.addEventListener('abort', onAbort, { once: true })
-    if (signal.aborted) onAbort()
-    promise.then(
-      (value) => finish(() => resolve(value)),
-      (error) => finish(() => reject(error)),
-    )
-  })
-}
-
-async function readExtractedTextCache(cachePath: string): Promise<ExtractedDocumentText | undefined> {
-  try {
-    const value = JSON.parse(await readFile(cachePath, 'utf8')) as Partial<ExtractedDocumentText>
-    if (
-      typeof value.text !== 'string'
-      || !value.text
-      || value.text.length > maxExtractedCharacters
-      || !Number.isInteger(value.paragraphCount)
-      || Number(value.paragraphCount) < 1
-      || value.characterCount !== value.text.length
-    ) return undefined
-    return value as ExtractedDocumentText
-  } catch {
-    return undefined
-  }
 }
 
 export async function extractDocxText(filePath: string, signal?: AbortSignal): Promise<ExtractedDocumentText> {
@@ -441,25 +314,4 @@ function classifyStatFailure(error: unknown, documentType: 'DOCX' | 'PDF') {
   const retryable = !permanentStatErrnos.has(code)
   const detail = error instanceof Error && error.message ? `：${error.message}` : ''
   return new DocumentParseError(`${documentType} 文件读取失败${detail}`, retryable, { code, cause: error })
-}
-
-const PROMPT_TEXT_OMISSION_MARK = '\n\n[正文中间部分因模型提示词限制被省略]\n\n'
-
-export function fitTextToPrompt(text: string, characterBudget: number) {
-  if (!Number.isFinite(characterBudget) || characterBudget < 0) {
-    throw new Error('正文截取预算无效。')
-  }
-  if (characterBudget === 0) return { text: '', truncated: text.length > 0 }
-  if (text.length <= characterBudget) return { text, truncated: false }
-
-  if (characterBudget <= PROMPT_TEXT_OMISSION_MARK.length) {
-    return { text: text.slice(0, characterBudget), truncated: true }
-  }
-  const contentBudget = characterBudget - PROMPT_TEXT_OMISSION_MARK.length
-  const headLength = Math.floor(contentBudget * 0.65)
-  const tailLength = contentBudget - headLength
-  return {
-    text: `${text.slice(0, headLength)}${PROMPT_TEXT_OMISSION_MARK}${text.slice(-tailLength)}`,
-    truncated: true,
-  }
 }

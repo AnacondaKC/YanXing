@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import type { SQLInputValue, SQLOutputValue } from 'node:sqlite'
 import test from 'node:test'
 import { getDefaultAiPromptConfig, getDefaultGlobalSystemPrompt } from '../lib/ai/prompt-defaults'
 
@@ -14,17 +15,24 @@ const {
   deleteAiModelChannel,
   getPublicAiModelSettings,
   getPublicAiPromptSettings,
-  getAiPromptSettingsSnapshot,
+  getAiPromptSettingsSnapshotInDatabase,
   getChannelApiKeyForBaseUrl,
   saveAiModelAssignments,
   saveAiModelChannel,
   saveAiPromptSettings,
   restoreAiPromptSettings,
 } = await import('../lib/db/settings-repository')
+const { getDatabase } = await import('../lib/db/client')
 const { createModelRuntime } = await import('../lib/ai/model-router')
+
+const initialAiSettings = snapshotAiSettings(getDatabase())
 
 test.after(async () => {
   await rm(directory, { recursive: true, force: true })
+})
+
+test.beforeEach(() => {
+  restoreAiSettings(getDatabase(), initialAiSettings)
 })
 
 test('model channels preserve multiple profiles, resolve per target, and fall back after removal', () => {
@@ -169,7 +177,7 @@ test('prompt settings persist versions, snapshots, and selective default restora
   assert.equal(savedPageAnalysis.version, 2)
   assert.equal(saved.systemPrompt.systemPrompt, '统一测试系统提示词。')
 
-  const snapshot = getAiPromptSettingsSnapshot()
+  const snapshot = getAiPromptSettingsSnapshotInDatabase(getDatabase())
   assert.equal(snapshot.find((prompt) => prompt.target === 'page_analysis')?.instructionPrompt, '测试分析页任务提示词。')
   assert.equal(snapshot.every((prompt) => prompt.systemPrompt === '统一测试系统提示词。'), true)
   assert.notEqual(snapshot, saved.prompts)
@@ -282,3 +290,53 @@ test('unreadable channel ciphertext keeps settings readable and fails model runt
   assert.equal(recovered.apiKeyLastFour, '-key')
   assert.equal(createModelRuntime('page_analysis').apiKey, 'decrypt-drill-test-key')
 })
+
+function snapshotAiSettings(database: ReturnType<typeof getDatabase>) {
+  return {
+    channels: readRows(database, 'ai_model_channels'),
+    profiles: readRows(database, 'ai_model_profiles'),
+    assignments: readRows(database, 'ai_model_assignments'),
+    prompts: readRows(database, 'ai_prompt_settings'),
+    revisions: readRows(database, 'settings_revisions'),
+  }
+}
+
+function restoreAiSettings(
+  database: ReturnType<typeof getDatabase>,
+  snapshot: ReturnType<typeof snapshotAiSettings>,
+) {
+  database.exec('BEGIN IMMEDIATE')
+  try {
+    database.exec('DELETE FROM ai_model_assignments')
+    database.exec('DELETE FROM ai_model_channels')
+    database.exec('DELETE FROM ai_prompt_settings')
+    database.exec('DELETE FROM settings_revisions')
+    insertRows(database, 'ai_model_channels', snapshot.channels)
+    insertRows(database, 'ai_model_profiles', snapshot.profiles)
+    insertRows(database, 'ai_model_assignments', snapshot.assignments)
+    insertRows(database, 'ai_prompt_settings', snapshot.prompts)
+    insertRows(database, 'settings_revisions', snapshot.revisions)
+    database.exec('COMMIT')
+  } catch (error) {
+    try { database.exec('ROLLBACK') } catch { /* transaction already closed */ }
+    throw error
+  }
+}
+
+function readRows(database: ReturnType<typeof getDatabase>, table: string) {
+  return database.prepare(`SELECT * FROM ${table}`).all()
+}
+
+function insertRows(
+  database: ReturnType<typeof getDatabase>,
+  table: string,
+  rows: Array<Record<string, SQLOutputValue>>,
+) {
+  for (const row of rows) {
+    const columns = Object.keys(row)
+    const values: SQLInputValue[] = columns.map((column) => row[column])
+    database.prepare(
+      `INSERT INTO ${table}(${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`,
+    ).run(...values)
+  }
+}

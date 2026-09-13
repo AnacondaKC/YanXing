@@ -75,8 +75,13 @@ export async function createP5NativeRoot(): Promise<P5NativeRoot> {
   const databasePath = join(root, 'yanxing.sqlite')
   const storageRoot = join(root, 'reports')
   await mkdir(storageRoot, { recursive: true })
-  const identity = await spawnP5Bootstrap({ databasePath, storageRoot, ownerUsername: P5_OWNER_USERNAME })
-  return { root, databasePath, storageRoot, identity }
+  try {
+    const identity = await spawnP5Bootstrap({ databasePath, storageRoot, ownerUsername: P5_OWNER_USERNAME })
+    return { root, databasePath, storageRoot, identity }
+  } catch (error) {
+    await rm(root, { recursive: true, force: true })
+    throw error
+  }
 }
 
 export async function disposeP5NativeRoot(root: P5NativeRoot) {
@@ -364,8 +369,16 @@ async function spawnP5Bootstrap(config: P5BootstrapConfig): Promise<P5NativeIden
   return JSON.parse(line) as P5NativeIdentity
 }
 
-function waitForIpcMessage<T>(child: ChildProcess, match: (message: T) => boolean) {
+export function waitForIpcMessage<T>(child: ChildProcess, match: (message: T) => boolean, timeoutMs = 15_000) {
   return new Promise<T>((resolve, reject) => {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      reject(new Error('child already exited before IPC result'))
+      return
+    }
+    const deadline = setTimeout(() => {
+      cleanup()
+      reject(new Error('Timed out waiting for child IPC result after ' + timeoutMs + 'ms'))
+    }, timeoutMs)
     const onMessage = (message: T) => {
       if (!match(message)) return
       cleanup()
@@ -380,6 +393,7 @@ function waitForIpcMessage<T>(child: ChildProcess, match: (message: T) => boolea
       reject(new Error('child exited before IPC result (' + String(code ?? signal) + ')'))
     }
     const cleanup = () => {
+      clearTimeout(deadline)
       child.off('message', onMessage)
       child.off('error', onError)
       child.off('exit', onExit)
@@ -390,10 +404,26 @@ function waitForIpcMessage<T>(child: ChildProcess, match: (message: T) => boolea
   })
 }
 
-function waitForSpawnExit(child: ChildProcess) {
+export function waitForSpawnExit(child: ChildProcess, timeoutMs = 15_000) {
   return new Promise<[number | null, NodeJS.Signals | null]>((resolve, reject) => {
-    child.once('error', reject)
-    child.once('exit', (code, signal) => resolve([code, signal]))
+    let timedOut = false
+    const deadline = setTimeout(() => {
+      timedOut = true
+      child.kill('SIGKILL')
+    }, timeoutMs)
+    const cleanup = () => {
+      clearTimeout(deadline)
+      child.off('error', onError)
+      child.off('close', onClose)
+    }
+    const onError = (error: Error) => { cleanup(); reject(error) }
+    const onClose = (code: number | null, signal: NodeJS.Signals | null) => {
+      cleanup()
+      if (timedOut) reject(new Error('Timed out waiting for child exit after ' + timeoutMs + 'ms'))
+      else resolve([code, signal])
+    }
+    child.once('error', onError)
+    child.once('close', onClose)
   })
 }
 

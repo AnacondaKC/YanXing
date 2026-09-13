@@ -31,9 +31,6 @@ export const MAX_MINDMAP_LABEL_LENGTH = 160
 export const MIN_WORD_CLOUD_KEYWORDS = 50
 export const MAX_WORD_CLOUD_KEYWORDS = 60
 
-/** 单页决策洞察最多允许的独立重新生成次数 */
-export const MAX_INSIGHT_REGENERATIONS = 3
-
 export type AnalysisTrackedModuleId = AnalysisModuleId | 'report_insight'
 
 export interface AnalysisPromptConfig {

@@ -1,5 +1,5 @@
 import { pathToFileURL } from 'node:url'
-import type { UserRole } from '@/lib/auth/session'
+import type { UserRole } from '@/modules/users/domain'
 import { loadYanXingEnv } from '../lib/config/load-env.mjs'
 
 loadYanXingEnv()

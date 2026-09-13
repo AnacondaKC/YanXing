@@ -7,6 +7,8 @@ import path from 'node:path'
 const directory = await mkdtemp(path.join(tmpdir(), 'yanxing-workspace-routes-'))
 process.env.YANXING_DATABASE_PATH = path.join(directory, 'workspace-routes.sqlite')
 process.env.YANXING_SETTINGS_ENCRYPTION_KEY = 'workspace-routes-encryption-key'
+process.env.YANXING_CHAT_COMPLETIONS_API_KEY = 'test-key-never-used-for-network'
+process.env.YANXING_CHAT_COMPLETIONS_BASE_URL = 'http://127.0.0.1:1'
 
 const { createOrUpdateUser, createSession, sessionCookieName } = await import('../lib/auth/session')
 const { getDatabase } = await import('../lib/db/client')
@@ -193,7 +195,14 @@ test('report upload protocol, immutability, delete reason, and library visibilit
 
   const detail = await jsonStatus(await getReport(new Request('http://localhost/api/reports/' + submitted.reportId, { headers: cookie(ownerToken) }), { params: Promise.resolve({ reportId: submitted.reportId }) }))
   assert.equal(detail.status, 200)
-  assert.ok('analysisTask' in detail.body || true)
+  assert.equal(detail.body.id, submitted.reportId)
+  assert.equal(detail.body.projectId, project.id)
+  assert.equal(detail.body.stageId, submitted.stageId)
+  assert.deepEqual(detail.body.history, { analysis: [], insight: [] })
+  assert.deepEqual(detail.body.progress, {})
+  assert.equal(Object.hasOwn(detail.body, 'analysisTask'), false)
+  assert.equal(detail.body.outboxPending, true)
+  assert.equal((detail.body.dispatch as { status: string }).status, 'pending')
 
   const deleted = await jsonStatus(await deleteReport(jsonRequest('http://localhost/api/reports/' + submitted.reportId, 'DELETE', ownerToken, { reason: '重复提交，保留原件' }), { params: Promise.resolve({ reportId: submitted.reportId }) }))
   assert.equal(deleted.status, 200)
@@ -224,6 +233,29 @@ test('overview GET applies per-user limits without sharing another user bucket',
   assert.equal(limited.status, 429)
   assert.ok(limited.headers.get('Retry-After'))
   assert.equal((await read(createSession(other.id).token)).status, 200)
+})
+
+test('report detail exposes the admitted analysis task and its single-job alias', async () => {
+  const owner = createOrUpdateUser({ username: 'ws-detail-task-owner', displayName: '详情任务负责人', password: 'password-123456', role: 'researcher' })
+  const project = createNativeProject({ database: getDatabase(), ownerId: owner.id, title: '任务详情课题' })
+  const submitted = submitNativeReport({ database: getDatabase(), actorId: owner.id, projectId: project.id })
+  const ownerToken = createSession(owner.id).token
+  const admitted = await jsonStatus(await analyzeReport(new Request('http://localhost/api/reports/' + submitted.reportId + '/analyze', {
+    method: 'POST', headers: cookie(ownerToken),
+  }), { params: Promise.resolve({ reportId: submitted.reportId }) }))
+  assert.equal(admitted.status, 202, JSON.stringify(admitted.body))
+  assert.equal(admitted.body.reused, false)
+  const job = admitted.body.job as { id: string; reportId: string; operation: string; status: string }
+  assert.ok(job.id)
+  assert.equal(job.reportId, submitted.reportId)
+  assert.equal(job.operation, 'analysis')
+  assert.equal(job.status, 'queued')
+  const queuedDetail = await jsonStatus(await getReport(new Request('http://localhost/api/reports/' + submitted.reportId, { headers: cookie(ownerToken) }), { params: Promise.resolve({ reportId: submitted.reportId }) }))
+  assert.equal(queuedDetail.status, 200)
+  assert.deepEqual(queuedDetail.body.analysisTask, admitted.body.job)
+  assert.deepEqual(queuedDetail.body.job, admitted.body.job)
+  assert.equal(((queuedDetail.body.progress as { analysis: { status: string } }).analysis).status, 'queued')
+
 })
 
 test('confirmation replay does not duplicate upload notifications', async () => {
@@ -313,9 +345,15 @@ test('native HTTP permits editor configuration only and preserves admin-only own
   for (const token of [ownerToken, editorToken]) {
     const members = { revision: 0, members: [{ userId: stranger.id, role: 'owner' }] }
     assert.equal((await saveMembers(jsonRequest(url + '/members', 'PUT', token, members), context)).status, 403)
-    for (const fields of [{ ownerId: stranger.id }, { ownerName: stranger.displayName }, { collaboratorIds: [stranger.id] }, { members: members.members }]) {
+    for (const { fields, status, code } of [
+      { fields: { ownerId: stranger.id }, status: 409, code: 'PROJECT_FIELD_RETIRED' },
+      { fields: { ownerName: stranger.displayName }, status: 400, code: 'INVALID_SUBMISSION' },
+      { fields: { collaboratorIds: [stranger.id] }, status: 409, code: 'PROJECT_FIELD_RETIRED' },
+      { fields: { members: members.members }, status: 400, code: 'INVALID_SUBMISSION' },
+    ]) {
       const response = await patchProject(jsonRequest(url, 'PATCH', token, { expectedUpdatedAt: editedBody.project.updatedAt, ...fields }), context)
-      assert.ok(response.status === 400 || response.status === 409)
+      assert.equal(response.status, status, JSON.stringify(fields))
+      assert.equal((await response.json()).code, code, JSON.stringify(fields))
     }
   }
   assert.equal(database.prepare("SELECT user_id FROM project_members WHERE project_id=? AND role='owner'").get(project.id)?.user_id, owner.id)

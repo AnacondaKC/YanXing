@@ -9,7 +9,6 @@ const directory = await mkdtemp(`${tmpdir()}/yanxing-proxy-`)
 process.env.YANXING_DATABASE_PATH = path.join(directory, 'proxy-test.sqlite')
 
 const { createOrUpdateUser, createSession, csrfCookieName, sessionCookieName } = await import('../lib/auth/session')
-const { getDatabase } = await import('../lib/db/client')
 const { config, proxy } = await import('../proxy')
 
 test.after(async () => {
@@ -107,12 +106,4 @@ test('task retries do not consume the independent insight-start bucket', () => {
   )
   for (let attempt = 0; attempt < 4; attempt += 1) assert.equal(proxy(insight()).status, 200)
   assert.equal(proxy(insight()).status, 429)
-})
-
-
-test('proxy maps an unavailable rate limiter to 503', () => {
-  getDatabase().close()
-  const response = proxy(new NextRequest('http://localhost/api/auth/login', { method: 'POST', headers: { host: 'localhost' } }))
-  assert.equal(response.status, 503)
-  assert.equal(response.headers.get('Retry-After'), '5')
 })

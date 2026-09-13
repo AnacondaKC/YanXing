@@ -141,7 +141,7 @@ export function AdminSettingsDialog({
         {notice && (
           <div
             role="status"
-            className="pointer-events-none absolute left-1/2 top-3.5 z-30 flex -translate-x-1/2 items-center gap-2 rounded-lg border border-yx-ink bg-yx-ink px-3.5 py-1.5 text-xs font-medium text-white shadow-lg animate-in fade-in duration-150"
+            className="pointer-events-none absolute left-1/2 top-3.5 z-30 flex -translate-x-1/2 items-center gap-2 rounded-lg border border-yx-ink bg-yx-ink px-3.5 py-1.5 text-xs font-medium text-white shadow-lg yx-notice-enter duration-150"
           >
             <Check className="h-3.5 w-3.5 text-emerald-400" />
             <span>{notice}</span>

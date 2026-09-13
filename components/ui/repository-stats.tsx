@@ -1,6 +1,7 @@
 import type { LucideIcon } from 'lucide-react'
 import type { CSSProperties, ReactNode } from 'react'
 import type { RepositoryDataState } from '@/components/repository-loading'
+import { sparklineGeometry, sparklineValues } from '@/lib/sparkline-geometry'
 
 export function CellCaption({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -92,16 +93,7 @@ function RepositorySparkline({
   const width = 56
   const height = 22
   const pad = 2
-  const values = points.length > 1 ? points : points.length === 1 ? [points[0], points[0]] : [0, 0]
-  const min = Math.min(...values)
-  const max = Math.max(...values)
-  const flat = max === min
-  const range = flat ? 1 : max - min
-  const coords = values.map((point, index) => {
-    const x = pad + (index * (width - pad * 2)) / (values.length - 1)
-    const y = flat ? height / 2 : height - pad - ((point - min) / range) * (height - pad * 2)
-    return [x, y] as const
-  })
+  const { coords } = sparklineGeometry(sparklineValues(points), { width, height, pad })
   const linePath = smoothLinePath(coords)
   const last = coords[coords.length - 1]
   const first = coords[0]

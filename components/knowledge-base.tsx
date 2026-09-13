@@ -6,7 +6,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } fro
 import { Button } from '@/components/ui/button'
 import { CardAura, GroupCardDecoration } from '@/components/ui/card-decoration'
 import { RepositoryLoading, type RepositoryDataState } from '@/components/repository-loading'
-import { useRepositoryEntrance } from '@/components/use-repository-entrance'
+import { useLatestRequest } from '@/components/use-latest-request'
+import { useWorkspaceEntrance } from '@/components/use-workspace-entrance'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Dialog, DialogBody, DialogFooter, DialogHeader } from '@/components/ui/dialog'
 import { EmptyState } from '@/components/ui/empty-state'
@@ -63,7 +64,7 @@ export function KnowledgeBaseWorkspace({
   const [items, setItems] = useState<KnowledgeItem[]>([])
   const [loading, setLoading] = useState(true)
   const [hasLoaded, setHasLoaded] = useState(false)
-  const { entering, finishEntrance } = useRepositoryEntrance(loading)
+  const { entering, finishEntrance } = useWorkspaceEntrance(loading)
   const [loadError, setLoadError] = useState('')
   const initialLoading = loading && !hasLoaded
   const dataState: RepositoryDataState = hasLoaded ? 'ready' : loading ? 'loading' : 'error'
@@ -78,37 +79,29 @@ export function KnowledgeBaseWorkspace({
   const onKnowledgeCountChangeRef = useRef(onKnowledgeCountChange)
   onKnowledgeCountChangeRef.current = onKnowledgeCountChange
 
-  const loadSequenceRef = useRef(0)
-  const loadControllerRef = useRef<AbortController | undefined>(undefined)
+  const { begin } = useLatestRequest()
 
   const fetchItems = useCallback(async () => {
-    const requestSequence = ++loadSequenceRef.current
-    loadControllerRef.current?.abort()
-    const controller = new AbortController()
-    loadControllerRef.current = controller
+    const request = begin()
     setLoading(true)
     try {
-      const result = await fetchAllPages<KnowledgeItem>('/api/knowledge', 'items', { cache: 'no-store', signal: controller.signal })
-      if (controller.signal.aborted || requestSequence !== loadSequenceRef.current) return
+      const result = await fetchAllPages<KnowledgeItem>('/api/knowledge', 'items', { cache: 'no-store', signal: request.signal })
+      if (!request.isCurrent()) return
       setItems(result.items)
       setHasLoaded(true)
       onKnowledgeCountChangeRef.current?.()
       setLoadError('')
     } catch {
-      if (controller.signal.aborted || requestSequence !== loadSequenceRef.current) return
+      if (!request.isCurrent()) return
       setLoadError('知识库读取失败，请重试；已加载的内容会继续保留。')
     } finally {
-      if (loadControllerRef.current === controller) loadControllerRef.current = undefined
-      if (!controller.signal.aborted && requestSequence === loadSequenceRef.current) setLoading(false)
+      request.end()
+      if (request.isCurrent()) setLoading(false)
     }
-  }, [])
+  }, [begin])
 
   useEffect(() => {
     void fetchItems()
-    return () => {
-      loadSequenceRef.current += 1
-      loadControllerRef.current?.abort()
-    }
   }, [fetchItems])
 
   const categoryOptions = useMemo(() => {
@@ -443,20 +436,23 @@ export function KnowledgeBaseWorkspace({
       {uploadOpen && (
         <UploadKnowledgeDialog
           onClose={() => setUploadOpen(false)}
-          onUploaded={(newItem) => {
-            setItems((current) => [newItem, ...current])
+          onUploaded={(newItems) => {
+            setItems((current) => [...newItems, ...current])
             setHasLoaded(true)
             setCategoryFilter('all')
             onKnowledgeCountChangeRef.current?.()
-            setUploadOpen(false)
-            onNotice('参考研报已收录到知识库。')
+            onNotice(newItems.length > 1 ? `已收录 ${newItems.length} 份参考研报。` : '参考研报已收录到知识库。')
           }}
         />
       )}
 
       {deleteTarget && (
-        <DeleteKnowledgeDialog
-          item={deleteTarget}
+        <ConfirmDialog
+          title="确认删除此研报？"
+          description={'确认删除「' + deleteTarget.title + '」？此操作无法撤销。'}
+          titleId="delete-knowledge-title"
+          descriptionId="delete-knowledge-description"
+          confirmLabel="确认删除"
           loading={deletingId === deleteTarget.id}
           onClose={() => setDeleteTarget(undefined)}
           onConfirm={() => void handleDelete(deleteTarget)}
@@ -466,73 +462,65 @@ export function KnowledgeBaseWorkspace({
   )
 }
 
-function DeleteKnowledgeDialog({
-  item,
-  loading = false,
-  onClose,
-  onConfirm,
-}: {
-  item: KnowledgeItem
-  loading?: boolean
-  onClose: () => void
-  onConfirm: () => void
-}) {
-  return (
-    <ConfirmDialog
-      title="确认删除此研报？"
-      description={'确认删除「' + item.title + '」？此操作无法撤销。'}
-      titleId="delete-knowledge-title"
-      descriptionId="delete-knowledge-description"
-      confirmLabel="确认删除"
-      loading={loading}
-      onClose={onClose}
-      onConfirm={onConfirm}
-    />
-  )
-}
-
 function UploadKnowledgeDialog({
   onClose,
   onUploaded,
 }: {
   onClose: () => void
-  onUploaded: (item: KnowledgeItem) => void
+  onUploaded: (items: KnowledgeItem[]) => void
 }) {
-  const [file, setFile] = useState<File | null>(null)
+  const [files, setFiles] = useState<File[]>([])
   const [title, setTitle] = useState('')
   const [category, setCategory] = useState('行业研报')
   const [description, setDescription] = useState('')
   const [tags, setTags] = useState('')
   const [saving, setSaving] = useState(false)
+  const [progress, setProgress] = useState(0)
   const [error, setError] = useState('')
   const closeButtonRef = useRef<HTMLButtonElement>(null)
+  const single = files.length === 1
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (!file) {
+    if (!files.length) {
       setError('请选择要上传的研报文件。')
       return
     }
     setSaving(true)
     setError('')
-    const formData = new FormData()
-    formData.append('file', file)
-    formData.append('title', title.trim() || file.name)
-    formData.append('category', category)
-    formData.append('description', description.trim())
-    formData.append('tags', tags.trim())
-    const response = await apiFetch('/api/knowledge', {
-      method: 'POST',
-      headers: mutationHeaders(),
-      body: formData,
-    }).catch(() => null)
-    const body = (await response?.json().catch(() => null)) as { item?: KnowledgeItem; error?: string } | null
-    if (!response?.ok || !body?.item) {
-      setError(body?.error ?? '上传失败。')
-      setSaving(false)
-      return
+    setProgress(0)
+    const uploaded: KnowledgeItem[] = []
+    for (const [index, file] of files.entries()) {
+      const formData = new FormData()
+      formData.append('file', file)
+      // 多选时不逐份填标题，交给服务端按各自文件名生成。
+      formData.append('title', single ? title.trim() : '')
+      formData.append('category', category)
+      formData.append('description', description.trim())
+      formData.append('tags', tags.trim())
+      const response = await apiFetch('/api/knowledge', {
+        method: 'POST',
+        headers: mutationHeaders(),
+        body: formData,
+      }).catch(() => null)
+      const body = (await response?.json().catch(() => null)) as { item?: KnowledgeItem; error?: string } | null
+      if (!response?.ok || !body?.item) {
+        const remaining = files.slice(index)
+        setFiles(remaining)
+        setSaving(false)
+        setProgress(0)
+        if (uploaded.length) onUploaded(uploaded)
+        setError(
+          file.name + ' 上传失败：' + (body?.error ?? '请稍后重试。')
+          + (remaining.length > 1 ? ` 其余 ${remaining.length} 份尚未上传，可再次点击上传。` : ''),
+        )
+        return
+      }
+      uploaded.push(body.item)
+      setProgress(index + 1)
     }
-    onUploaded(body.item)
+    onUploaded(uploaded)
+    onClose()
   }
 
   return (
@@ -549,29 +537,36 @@ function UploadKnowledgeDialog({
           closeLabel="关闭上传参考研报对话框"
         />
         <DialogBody className="space-y-3.5 py-4">
-          <Field label="研报文件 (DOCX / PDF)" required>
+          <Field label="研报文件 (DOCX / PDF，可多选)" required>
             <FileDropzone
-              file={file}
+              multiple
+              files={files}
               maxBytes={knowledgeMaxUploadBytes}
               disabled={saving}
-              onFile={(next) => {
-                setFile(next)
-                setTitle((current) => current || next.name.replace(/\.[^/.]+$/, ''))
+              onFiles={(next) => {
+                setFiles(next)
+                setTitle((current) => next.length === 1 ? (current || next[0].name.replace(/\.[^/.]+$/, '')) : '')
                 setError('')
               }}
               onInvalid={setError}
               emptyTitle="选择或拖拽 DOCX / PDF 研报"
             />
           </Field>
-          <Field label="研报标题" htmlFor="knowledge-title" required>
-            <Input
-              id="knowledge-title"
-              required
-              value={title}
-              onChange={(event) => setTitle(event.target.value)}
-              placeholder="例如：2026年新能源储能行业深度研究报告"
-            />
-          </Field>
+          {single || !files.length ? (
+            <Field label="研报标题" htmlFor="knowledge-title" required>
+              <Input
+                id="knowledge-title"
+                required
+                value={title}
+                onChange={(event) => setTitle(event.target.value)}
+                placeholder="例如：2026年新能源储能行业深度研究报告"
+              />
+            </Field>
+          ) : (
+            <p className="text-xs text-yx-muted">
+              已选择 {files.length} 份文件，标题将分别取自各自文件名；分类、标签与摘要由本批共用。
+            </p>
+          )}
           <div className="grid grid-cols-2 gap-2.5">
             <Field label="分类归属">
               <CustomSelect
@@ -611,7 +606,9 @@ function UploadKnowledgeDialog({
         </DialogBody>
         <DialogFooter>
           <Button variant="ghost" onClick={onClose}>取消</Button>
-          <Button type="submit" loading={saving}>确认上传</Button>
+          <Button type="submit" loading={saving}>
+            {files.length > 1 ? (saving ? `上传中 ${progress}/${files.length}` : `确认上传 ${files.length} 份`) : '确认上传'}
+          </Button>
         </DialogFooter>
       </form>
     </Dialog>

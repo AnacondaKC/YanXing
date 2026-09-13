@@ -1,3 +1,4 @@
+import { setTimeout as wait } from 'node:timers/promises'
 import { getDatabase } from '@/lib/db/client'
 
 export interface RateLimitRule {
@@ -156,14 +157,13 @@ function boundedBucketKey(key: string, windowMs: number, limit: number) {
   return 'rl:' + hash.toString(16).padStart(16, '0')
 }
 
-function delay(milliseconds: number, signal?: AbortSignal) {
-  if (signal?.aborted) return Promise.reject(abortCancellation())
-  return new Promise<void>((resolve, reject) => {
-    const cleanup = () => signal?.removeEventListener('abort', abort)
-    const timer = setTimeout(() => { cleanup(); resolve() }, milliseconds)
-    const abort = () => { clearTimeout(timer); cleanup(); reject(abortCancellation()) }
-    signal?.addEventListener('abort', abort, { once: true })
-  })
+async function delay(milliseconds: number, signal?: AbortSignal) {
+  try {
+    await wait(milliseconds, undefined, { signal })
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') throw abortCancellation()
+    throw error
+  }
 }
 
 function abortCancellation() {

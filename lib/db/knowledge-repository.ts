@@ -1,5 +1,5 @@
 import { rm } from 'node:fs/promises'
-import type { AuthUser } from '@/lib/auth/session'
+import type { SessionUser as AuthUser } from '@/modules/users/domain'
 import { ReportAuthorizationChangedError } from '@/lib/auth/authorization-changed'
 import { getDatabase, inImmediateTransaction } from '@/lib/db/client'
 import { getKnowledgeCleanupTarget } from '@/lib/knowledge-storage'

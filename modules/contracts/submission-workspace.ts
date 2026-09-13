@@ -1,40 +1,15 @@
 import { Type, type Static } from 'typebox'
 import { Value } from 'typebox/value'
 import type { AnalysisSnapshotPayload, AnalysisStage } from '@/modules/contracts/analysis'
-import {
-  isStagePlanEdit,
-  isStageProjectCreate,
-  StagePlanEditSchema,
-  StageProjectCreateSchema,
-  type StagePlanEdit,
-  type StageProjectCreate,
-} from '@/modules/projects/stage-project-contract'
 import type { ProjectMemberRole } from '@/modules/projects/domain'
 import type { ProjectStageRecord, StageLifecycleStatus } from '@/modules/projects/stage-domain'
 import { PROJECT_FIELD_LIMITS } from '@/modules/projects/validation'
 import type { ReportInsightOutput } from '@/modules/insights/domain'
 import type { NotificationItem } from '@/modules/notifications/domain'
-import {
-  isReportSubmissionCommand,
-  isReportSubmissionIdempotencyKey,
-  type ReportSubmissionCommand,
-} from '@/modules/contracts/report-submission'
 import type { ReportSubmissionKind } from '@/modules/reports/submission-domain'
 import type { SubmissionComparison } from '@/modules/reports/submission-query'
 import type { SubmissionTask, SubmissionTaskResult } from '@/modules/reports/submission-task-domain'
 import type { ReportSubmissionReceipt, ReportUploadStatus } from '@/modules/reports/upload-domain'
-import { queryProjection } from '@/modules/reports/workspace-query'
-
-export {
-  isReportSubmissionCommand,
-  isReportSubmissionIdempotencyKey,
-  isStagePlanEdit,
-  isStageProjectCreate,
-  queryProjection,
-  StagePlanEditSchema,
-  StageProjectCreateSchema,
-}
-export type { ReportSubmissionCommand, ReportSubmissionReceipt, StagePlanEdit, StageProjectCreate, SubmissionComparison }
 
 /** Actual stage domain record. Frontend must not invent legacy Milestone. */
 export type ResearchStage = ProjectStageRecord

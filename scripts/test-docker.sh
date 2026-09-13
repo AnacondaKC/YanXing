@@ -21,57 +21,17 @@ WAIT_TIMEOUT_S=180
 STOP_TIMEOUT_S=100
 MIGRATE_WAIT_TIMEOUT_S=60
 MIGRATE_PROBE_S=20
-PROC_SCAN_JS=$(cat <<'EOF'
-import { readdirSync, readFileSync } from "node:fs"
+PROC_SCAN_JS=$(
+  cat "$root/scripts/proc-role-scan.mjs"
+  cat <<'EOF'
+
 const role = process.env.YANXING_SMOKE_PROC_ROLE ?? ""
 const action = process.env.YANXING_SMOKE_PROC_ACTION ?? "list"
-const self = process.pid
-const supervisorArgv = "/app/scripts/docker-supervisor.mjs"
-const webArgv = "/app/server.js"
-const workerArgv = "/app/.runtime/worker/index.mjs"
-const webTitle = /^next-server \(v[0-9]/
-const processes = new Map()
-
-function readArgv(pid) {
-  return readFileSync("/proc/" + pid + "/cmdline").toString("utf8").split("\0").filter(Boolean)
-}
-
-function readPpid(pid) {
-  const stat = readFileSync("/proc/" + pid + "/stat", "utf8")
-  const close = stat.lastIndexOf(")")
-  if (close < 0) return 0
-  return Number(stat.slice(close + 2).split(" ")[1]) || 0
-}
-
-function isWeb(argv) {
-  if (argv.includes(webArgv)) return true
-  return webTitle.test((argv[0] ?? "").trim())
-}
-
-function isWorker(argv) {
-  return argv.includes(workerArgv)
-}
-
-function matchesRole(argv) {
-  if (role === "web") return isWeb(argv)
-  if (role === "worker") return isWorker(argv)
-  return false
-}
-
-for (const entry of readdirSync("/proc")) {
-  if (!/^\d+$/.test(entry)) continue
-  const pid = Number(entry)
-  if (!Number.isInteger(pid) || pid <= 1 || pid === self) continue
-  let argv
-  try { argv = readArgv(pid) } catch { continue }
-  let ppid = 0
-  try { ppid = readPpid(pid) } catch { ppid = 0 }
-  processes.set(pid, { argv, ppid })
-}
-
+const processes = listProcRoles()
+const byPid = new Map(processes.map((proc) => [proc.pid, proc]))
 const supervisorPids = new Set()
-for (const [pid, proc] of processes) {
-  if (proc.argv.includes(supervisorArgv)) supervisorPids.add(pid)
+for (const proc of processes) {
+  if (proc.supervisor) supervisorPids.add(proc.pid)
 }
 
 function isUnderSupervisor(pid) {
@@ -80,7 +40,7 @@ function isUnderSupervisor(pid) {
   let current = pid
   while (current > 1 && !seen.has(current)) {
     seen.add(current)
-    const ppid = processes.get(current)?.ppid ?? 0
+    const ppid = byPid.get(current)?.ppid ?? 0
     if (supervisorPids.has(ppid)) return true
     current = ppid
   }
@@ -88,8 +48,9 @@ function isUnderSupervisor(pid) {
 }
 
 const pids = []
-for (const [pid, proc] of processes) {
-  if (matchesRole(proc.argv) && isUnderSupervisor(pid)) pids.push(pid)
+for (const proc of processes) {
+  const matches = role === "web" ? proc.web : role === "worker" ? proc.worker : false
+  if (matches && isUnderSupervisor(proc.pid)) pids.push(proc.pid)
 }
 if (action === "kill") {
   if (pids.length === 0) {

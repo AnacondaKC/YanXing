@@ -19,6 +19,16 @@ test('Docker smoke corruption targets the native identity, not the retired migra
   }
 })
 
+test('Docker smoke injects host proc-role-scan and keeps line pid kill protocol', () => {
+  assert.match(source, /cat "\$root\/scripts\/proc-role-scan\.mjs"/)
+  assert.match(source, /YANXING_SMOKE_PROC_ROLE/)
+  assert.match(source, /YANXING_SMOKE_PROC_ACTION/)
+  assert.match(source, /node --input-type=module -e "\$PROC_SCAN_JS"/)
+  assert.match(source, /process\.kill\(pid, "SIGKILL"\)/)
+  assert.match(source, /supervisorPids\.size === 0/)
+  assert.match(source, /isUnderSupervisor/)
+})
+
 test('Docker smoke recognizes current bootstrap and supervisor failures only', () => {
   const functionSource = source.match(/logs_show_migration_failure\(\) \{[\s\S]*?\n\}/)?.[0]
   assert.ok(functionSource)

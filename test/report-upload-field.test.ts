@@ -29,6 +29,28 @@ test('an empty picker exposes a keyboard-accessible named action and accepted re
   assert.doesNotMatch(markup, /animate-spin/)
 })
 
+test('an empty multi-select picker invites several files at once', () => {
+  const markup = renderToStaticMarkup(createElement(FileDropzone, { multiple: true, files: [], onFiles: () => {} }))
+  assert.match(markup, /type="file"[^>]*multiple=""/)
+  assert.match(markup, /aria-label="选择报告文件"/)
+  assert.match(markup, /可一次选择多份/)
+})
+
+test('a multi-select picker lists every chosen file without losing one', () => {
+  const files = [
+    new File(['a'], '附件1.项目技术指标.pdf', { type: 'application/pdf' }),
+    new File(['b'], '附件2.储能技术路线.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }),
+  ]
+  const markup = renderToStaticMarkup(createElement(FileDropzone, {
+    multiple: true,
+    files,
+    onFiles: () => assert.fail('Rendering the picker must not select files'),
+  }))
+  assert.match(markup, /已选定 2 个文件/)
+  assert.match(markup, /共 2 B/)
+  for (const file of files) assert.ok(markup.includes('title="' + file.name + '"'), file.name + ' must stay listed')
+})
+
 test('selected report names remain accessible even when their visual label is truncated', () => {
   const file = new File(['report'], '完整研究报告长文件名.pdf', { type: 'application/pdf' })
   const markup = renderToStaticMarkup(createElement(FileDropzone, { file, onFile }))

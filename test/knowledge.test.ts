@@ -11,6 +11,7 @@ process.env.YANXING_DATABASE_PATH = path.join(directory, 'knowledge-test.sqlite'
 process.env.YANXING_KNOWLEDGE_STORAGE_ROOT = storageRoot
 
 const { createOrUpdateUser, createSession, sessionCookieName } = await import('../lib/auth/session')
+const { getDatabase } = await import('../lib/db/client')
 const { getKnowledgeItem } = await import('../lib/db/knowledge-repository')
 const { GET: listKnowledge, POST: uploadKnowledge } = await import('../app/api/knowledge/route')
 const { DELETE: deleteKnowledge } = await import('../app/api/knowledge/[knowledgeId]/route')
@@ -50,6 +51,19 @@ async function streamingMultipart(file: File, title: string) {
   return { body, contentType: `multipart/form-data; boundary=${boundary}` }
 }
 
+async function knowledgeStorageSnapshot() {
+  const database = getDatabase()
+  return {
+    files: (await readdir(storageRoot)).sort(),
+    activeReservations: database.prepare(
+      "SELECT id FROM storage_reservations WHERE state = 'active' ORDER BY id",
+    ).all(),
+    allocations: database.prepare(
+      'SELECT owner_type, owner_id FROM storage_allocations ORDER BY owner_type, owner_id',
+    ).all(),
+  }
+}
+
 test('knowledge upload owns stored paths, bounds files, and hides internals', async () => {
   const uploader = createOrUpdateUser({ username: 'knowledge-uploader', displayName: '上传者', password: 'password-uploader-123', role: 'researcher' })
   const token = createSession(uploader.id).token
@@ -78,14 +92,31 @@ test('knowledge upload owns stored paths, bounds files, and hides internals', as
 
   const invalid = new FormData()
   invalid.set('file', new File(['plain text'], 'notes.txt', { type: 'text/plain' }))
-  const invalidResponse = await uploadKnowledge(request('http://localhost/api/knowledge', token, { method: 'POST', body: invalid }))
-  assert.equal(invalidResponse.status, 415)
-
   const oversized = new FormData()
   oversized.set('file', pdfFile('large.pdf', 20 * 1024 * 1024 + 1))
+  const storageBeforeFailures = await knowledgeStorageSnapshot()
+  const invalidResponse = await uploadKnowledge(request('http://localhost/api/knowledge', token, { method: 'POST', body: invalid }))
+  assert.equal(invalidResponse.status, 415)
   const oversizedResponse = await uploadKnowledge(request('http://localhost/api/knowledge', token, { method: 'POST', body: oversized }))
   assert.equal(oversizedResponse.status, 413)
-  assert.equal((await readdir(storageRoot)).length, 1)
+  assert.deepEqual(await knowledgeStorageSnapshot(), storageBeforeFailures)
+})
+
+test('knowledge upload keeps UTF-8 file names instead of latin1 mojibake', async () => {
+  const uploader = createOrUpdateUser({ username: 'knowledge-utf8', displayName: '中文名上传者', password: 'password-utf8-123', role: 'researcher' })
+  const token = createSession(uploader.id).token
+  const fileName = '附件1.项目技术指标.pdf'
+  const multipart = await streamingMultipart(pdfFile(fileName), '')
+  const upload = await uploadKnowledge(request('http://localhost/api/knowledge', token, {
+    method: 'POST',
+    body: multipart.body,
+    headers: { 'content-type': multipart.contentType },
+  }))
+  assert.equal(upload.status, 201)
+  const body = await upload.json() as { item: { fileName: string; title: string } }
+  assert.equal(body.item.fileName, fileName)
+  assert.equal(body.item.title, '附件1.项目技术指标')
+  assert.doesNotMatch(body.item.fileName, /Ã|Â|é™|ä»/)
 })
 
 test('knowledge deletion permits only uploader or administrator', async () => {

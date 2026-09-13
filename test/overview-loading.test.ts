@@ -271,3 +271,59 @@ test('loading report and knowledge panels keep aria-busy fill wrappers without e
   }
   assert.doesNotMatch(panelMarkup(html, '分析质量全景'), /flex min-h-0 flex-1 flex-col/)
 })
+
+function sparklineSvg(html: string, label: string) {
+  const idx = html.indexOf('aria-label="' + label + '"')
+  assert.notEqual(idx, -1, 'missing ' + label)
+  return html.slice(html.lastIndexOf('<svg', idx), html.indexOf('</svg>', idx) + 6)
+}
+
+test('overview sparklines keep original hasData markup for mini, panel and stat charts', () => {
+  const html = renderOverview({
+    projectsState: 'ready',
+    statsState: 'ready',
+    stats: readyStats,
+    recentReports: [nativeCard({ aiScore: 70 }), nativeCard({ id: 'r2', aiScore: 80 })],
+  })
+  assert.equal(sparklineSvg(html, '近 7 日已分析课题累计走势'), '<svg viewBox="0 0 48 20" class="mb-0.5 h-5 w-12 shrink-0 overflow-visible" role="img" aria-label="近 7 日已分析课题累计走势"><title>近 7 日已分析课题累计走势</title><defs><linearGradient id="yxAnalyzedTrend" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="var(--yx-brand)" stop-opacity="0.28"></stop><stop offset="100%" stop-color="var(--yx-brand)" stop-opacity="0"></stop></linearGradient></defs><path d="M1.5,18.5 L46.5,1.5 L46.5,20 L1.5,20 Z" fill="url(#yxAnalyzedTrend)"></path><path d="M1.5,18.5 L46.5,1.5" fill="none" stroke="var(--yx-brand)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><circle cx="46.5" cy="1.5" r="1.8" fill="var(--yx-brand)" stroke="var(--yx-paper)" stroke-width="0.9"></circle></svg>')
+  assert.equal(sparklineSvg(html, '最近 2 版报告评分趋势'), '<svg viewBox="0 0 96 28" class="h-7 w-[5.5rem] shrink-0 overflow-visible" role="img" aria-label="最近 2 版报告评分趋势"><title>最近 2 版报告评分趋势</title><defs><linearGradient id="yxRecentReportScoreTrend" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="var(--yx-brand)" stop-opacity="0.28"></stop><stop offset="100%" stop-color="var(--yx-brand)" stop-opacity="0"></stop></linearGradient></defs><path d="M2.0,2.0 L94.0,26.0 L94.0,28 L2.0,28 Z" fill="url(#yxRecentReportScoreTrend)"></path><path d="M2.0,2.0 L94.0,26.0" fill="none" stroke="var(--yx-brand)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path><circle cx="94" cy="26" r="2.2" fill="var(--yx-brand-hover)" stroke="var(--yx-paper)" stroke-width="1"></circle></svg>')
+  assert.equal(sparklineSvg(html, '近 7 日趋势'), '<svg viewBox="0 0 96 28" class="h-7 w-[5.5rem] max-w-[46%] shrink-0 overflow-visible" aria-label="近 7 日趋势"><defs><linearGradient id="yxStatTrend-versions" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="var(--yx-brand)" stop-opacity="0.28"></stop><stop offset="100%" stop-color="var(--yx-brand)" stop-opacity="0"></stop></linearGradient></defs><path d="M2.0,26.0 L48.0,14.0 L94.0,2.0 L94.0,28 L2.0,28 Z" fill="url(#yxStatTrend-versions)"></path><path d="M2.0,26.0 L48.0,14.0 L94.0,2.0" fill="none" stroke="var(--yx-brand)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path><circle cx="94" cy="2" r="2.2" fill="var(--yx-brand-hover)" stroke="var(--yx-paper)" stroke-width="1"></circle></svg>')
+  assert.equal((html.match(/rotate\(-14 23 26\)/g) || []).length, 2)
+  assert.equal((html.match(/M28 12v26/g) || []).length, 2)
+  assert.equal((html.match(/M28 8v40M8 28h40/g) || []).length, 1)
+  assert.equal((html.match(/M16 16h16M16 22h16M16 28h11M16 34h8/g) || []).length, 1)
+  assert.equal((html.match(/M17 22.5 19.5 25 24 20/g) || []).length, 1)
+})
+
+test('overview sparkline empty and zero branches keep original dash, area and null rules', () => {
+  const empty = renderOverview({
+    projectsState: 'ready',
+    statsState: 'ready',
+    stats: {
+      ...readyStats,
+      submittedReportCount: 0,
+      weeklyNewReports: 0,
+      knowledgeCount: 0,
+      jobStats: { completed: 0, failed: 0, cancelled: 0, running: 0, queued: 0 },
+      trends: { submissions: [], characters: [], successRate: [], knowledge: [], averageScore: [], analyzedProjects: [] },
+    },
+  })
+  assert.equal(sparklineSvg(empty, '近 7 日已分析课题累计走势'), '<svg viewBox="0 0 48 20" class="mb-0.5 h-5 w-12 shrink-0 overflow-visible" role="img" aria-label="近 7 日已分析课题累计走势"><title>近 7 日已分析课题累计走势</title><defs><linearGradient id="yxAnalyzedTrend" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="var(--yx-brand)" stop-opacity="0.28"></stop><stop offset="100%" stop-color="var(--yx-brand)" stop-opacity="0"></stop></linearGradient></defs><path d="M1.5,10.0 L46.5,10.0" fill="none" stroke="var(--yx-line)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="2 3"></path></svg>')
+  assert.equal(sparklineSvg(empty, '最近 0 版报告评分趋势'), '<svg viewBox="0 0 96 28" class="h-7 w-[5.5rem] shrink-0 overflow-visible" role="img" aria-label="最近 0 版报告评分趋势"><title>最近 0 版报告评分趋势</title><defs><linearGradient id="yxRecentReportScoreTrend" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="var(--yx-brand)" stop-opacity="0.28"></stop><stop offset="100%" stop-color="var(--yx-brand)" stop-opacity="0"></stop></linearGradient></defs><path d="M2.0,14.0 L94.0,14.0" fill="none" stroke="var(--yx-line)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="3 3"></path></svg>')
+  assert.equal((empty.match(/aria-label="近 7 日趋势"/g) || []).length, 0)
+
+  const zeros = renderOverview({
+    projectsState: 'ready',
+    statsState: 'ready',
+    stats: {
+      ...readyStats,
+      trends: { submissions: [0, 0], characters: [0], successRate: [80, 80, 80], knowledge: [0], averageScore: [], analyzedProjects: [0, 0, 0] },
+    },
+    recentReports: [nativeCard({ aiScore: 0 })],
+  })
+  assert.equal(sparklineSvg(zeros, '近 7 日已分析课题累计走势'), '<svg viewBox="0 0 48 20" class="mb-0.5 h-5 w-12 shrink-0 overflow-visible" role="img" aria-label="近 7 日已分析课题累计走势"><title>近 7 日已分析课题累计走势</title><defs><linearGradient id="yxAnalyzedTrend" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="var(--yx-brand)" stop-opacity="0.28"></stop><stop offset="100%" stop-color="var(--yx-brand)" stop-opacity="0"></stop></linearGradient></defs><path d="M1.5,10.0 L24.0,10.0 L46.5,10.0" fill="none" stroke="var(--yx-line)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="2 3"></path></svg>')
+  assert.equal(sparklineSvg(zeros, '最近 1 版报告评分趋势'), '<svg viewBox="0 0 96 28" class="h-7 w-[5.5rem] shrink-0 overflow-visible" role="img" aria-label="最近 1 版报告评分趋势"><title>最近 1 版报告评分趋势</title><defs><linearGradient id="yxRecentReportScoreTrend" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="var(--yx-brand)" stop-opacity="0.28"></stop><stop offset="100%" stop-color="var(--yx-brand)" stop-opacity="0"></stop></linearGradient></defs><path d="M2.0,14.0 L94.0,14.0 L94.0,28 L2.0,28 Z" fill="url(#yxRecentReportScoreTrend)"></path><path d="M2.0,14.0 L94.0,14.0" fill="none" stroke="var(--yx-brand)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path><circle cx="94" cy="14" r="2.2" fill="var(--yx-brand-hover)" stroke="var(--yx-paper)" stroke-width="1"></circle></svg>')
+  assert.equal(sparklineSvg(zeros, '近 7 日趋势'), '<svg viewBox="0 0 96 28" class="h-7 w-[5.5rem] max-w-[46%] shrink-0 overflow-visible" aria-label="近 7 日趋势"><defs><linearGradient id="yxStatTrend-versions" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="var(--yx-brand)" stop-opacity="0.28"></stop><stop offset="100%" stop-color="var(--yx-brand)" stop-opacity="0"></stop></linearGradient></defs><path d="M2.0,14.0 L94.0,14.0 L94.0,28 L2.0,28 Z" fill="url(#yxStatTrend-versions)"></path><path d="M2.0,14.0 L94.0,14.0" fill="none" stroke="var(--yx-brand)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path><circle cx="94" cy="14" r="2.2" fill="var(--yx-brand-hover)" stroke="var(--yx-paper)" stroke-width="1"></circle></svg>')
+  assert.doesNotMatch(sparklineSvg(zeros, '近 7 日已分析课题累计走势'), /<circle/)
+  assert.match(sparklineSvg(zeros, '最近 1 版报告评分趋势'), /<circle/)
+})

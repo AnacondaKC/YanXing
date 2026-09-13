@@ -1,3 +1,4 @@
+import { setTimeout as wait } from 'node:timers/promises'
 import { runtimeConfig } from '@/lib/config/environment'
 import type { SubmissionTaskRepository } from '@/lib/db/submission-task-repository'
 import type { ReportSubmissionOutbox } from '@/lib/db/report-submission-outbox'
@@ -153,10 +154,7 @@ async function waitForProgress(running:Set<Promise<void>>,signal:AbortSignal) {
   finally {wait.abort();signal.removeEventListener('abort',abort)}
 }
 function delay(milliseconds:number,signal:AbortSignal) {
-  return new Promise<void>(resolve=>{
-    const done=()=>{clearTimeout(timer);signal.removeEventListener('abort',done);resolve()}
-    const timer=setTimeout(done,milliseconds)
-    signal.addEventListener('abort',done,{once:true})
-    if(signal.aborted)done()
+  return wait(milliseconds,undefined,{signal}).catch((error:unknown)=>{
+    if(!(error instanceof Error && error.name==='AbortError'))throw error
   })
 }

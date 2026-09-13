@@ -171,20 +171,13 @@ export async function runStorageMaintenance(options: StorageMaintenanceOptions =
     }
   }
 
+  const deletionContext = { database, protectedPaths: plan.protectedPaths, activeReservationKinds: plan.activeReservationKinds, roots, timestampMs, orphanGraceMs }
   const deletion = dryRun
     ? emptyDeletionResult()
-    : deleteOrphanFiles(database, plan.candidates, plan.protectedPaths, plan.activeReservationKinds, roots, timestampMs, orphanGraceMs)
+    : deleteOrphanFiles(plan.candidates, deletionContext)
   const sidecarDeletion = dryRun
     ? emptyDeletionResult()
-    : deleteOrphanSidecars(
-        database,
-        sidecars.filter((sidecar) => sidecar.kind !== 'report'),
-        plan.protectedPaths,
-        plan.activeReservationKinds,
-        roots,
-        timestampMs,
-        orphanGraceMs,
-      )
+    : deleteOrphanFiles(sidecars.filter((sidecar) => sidecar.kind !== 'report'), deletionContext)
 
   return {
     dryRun,
@@ -514,17 +507,19 @@ function rebuildStorageUsage(database: DatabaseSync, timestamp: string) {
 }
 
 function deleteOrphanFiles(
-  database: DatabaseSync,
-  candidates: ManagedFile[],
-  protectedPaths: Set<string>,
-  activeReservationKinds: Set<StorageRootKind>,
-  roots: StorageMaintenanceRoots,
-  timestampMs: number,
-  orphanGraceMs: number,
+  candidates: Array<ManagedFile | SidecarFile>,
+  { database, protectedPaths, activeReservationKinds, roots, timestampMs, orphanGraceMs }: {
+    database: DatabaseSync
+    protectedPaths: Set<string>
+    activeReservationKinds: Set<StorageRootKind>
+    roots: StorageMaintenanceRoots
+    timestampMs: number
+    orphanGraceMs: number
+  },
 ) {
   const result = emptyDeletionResult()
   const cutoffMs = timestampMs - orphanGraceMs
-  const eligibleCandidates: ManagedFile[] = []
+  const eligibleCandidates: Array<ManagedFile | SidecarFile> = []
 
   // 先完成文件系统侧的批量筛选，避免在数据库保护查询期间持有写锁。
   for (const candidate of candidates) {
@@ -533,13 +528,15 @@ function deleteOrphanFiles(
         result.skippedProtected += 1
         continue
       }
+      const sourcePath = 'sourcePath' in candidate ? candidate.sourcePath : undefined
+      if (sourcePath !== undefined && (protectedPaths.has(sourcePath) || safeLstat(sourcePath)?.isFile())) continue
       const current = safeLstat(candidate.path)
       if (!current || !current.isFile()) continue
       if (current.mtimeMs >= cutoffMs || current.size !== candidate.sizeBytes || (candidate.inode !== undefined && current.ino !== candidate.inode)) {
         result.skippedRecent += 1
         continue
       }
-      if (protectedPaths.has(candidate.path)) {
+      if (sourcePath === undefined && protectedPaths.has(candidate.path)) {
         result.skippedProtected += 1
         continue
       }
@@ -556,10 +553,12 @@ function deleteOrphanFiles(
   // 在最终 unlink 批次前批量刷新保护路径和 reservation 类型；候选循环不再重复全表查询。
   const freshProtectedPaths = readProtectedPaths(database)
   const freshActiveReservationKinds = readActiveReservationKinds(database, new Date(timestampMs).toISOString())
-  // 快照后到 unlink 之间仍可能有跨进程提交；上传使用不可复用随机路径，且最小宽限期覆盖上传总时限，作为该无锁窗口的边界。
+  // ponytail: 无锁快照窗口依赖随机路径与最小宽限；若允许路径复用，需要逐文件协调。
   for (const candidate of eligibleCandidates) {
     try {
-      if (candidate.kind === 'report' || freshProtectedPaths.has(candidate.path)) {
+      const sourcePath = 'sourcePath' in candidate ? candidate.sourcePath : undefined
+      if (sourcePath !== undefined && (freshProtectedPaths.has(sourcePath) || safeLstat(sourcePath)?.isFile())) continue
+      if (candidate.kind === 'report' || (sourcePath === undefined && freshProtectedPaths.has(candidate.path))) {
         result.skippedProtected += 1
         continue
       }
@@ -585,71 +584,6 @@ function deleteOrphanFiles(
     } catch (error) {
       if (isMissingFileError(error)) continue
       result.errors.push({ path: candidate.path, message: error instanceof Error ? error.message : String(error) })
-    }
-  }
-  return result
-}
-
-function deleteOrphanSidecars(
-  database: DatabaseSync,
-  sidecars: SidecarFile[],
-  protectedPaths: Set<string>,
-  activeReservationKinds: Set<StorageRootKind>,
-  roots: StorageMaintenanceRoots,
-  timestampMs: number,
-  orphanGraceMs: number,
-) {
-  const result = emptyDeletionResult()
-  const cutoffMs = timestampMs - orphanGraceMs
-  const eligible: SidecarFile[] = []
-
-  for (const sidecar of sidecars) {
-    try {
-      if (!isSafeManagedFilePath(sidecar.path, sidecar.kind, roots)) {
-        result.skippedProtected += 1
-        continue
-      }
-      if (protectedPaths.has(sidecar.sourcePath) || safeLstat(sidecar.sourcePath)?.isFile()) continue
-      const current = safeLstat(sidecar.path)
-      if (!current || !current.isFile()) continue
-      if (current.mtimeMs >= cutoffMs || current.size !== sidecar.sizeBytes || (sidecar.inode !== undefined && current.ino !== sidecar.inode)) {
-        result.skippedRecent += 1
-        continue
-      }
-      if (activeReservationKinds.has(sidecar.kind)) {
-        result.skippedActiveReservation += 1
-        continue
-      }
-      eligible.push(sidecar)
-    } catch (error) {
-      if (!isMissingFileError(error)) result.errors.push({ path: sidecar.path, message: error instanceof Error ? error.message : String(error) })
-    }
-  }
-
-  const freshProtectedPaths = readProtectedPaths(database)
-  const freshActiveReservationKinds = readActiveReservationKinds(database, new Date(timestampMs).toISOString())
-  for (const sidecar of eligible) {
-    try {
-      if (freshProtectedPaths.has(sidecar.sourcePath) || safeLstat(sidecar.sourcePath)?.isFile()) continue
-      if (freshActiveReservationKinds.has(sidecar.kind)) {
-        result.skippedActiveReservation += 1
-        continue
-      }
-      if (!isSafeManagedFilePath(sidecar.path, sidecar.kind, roots)) {
-        result.skippedProtected += 1
-        continue
-      }
-      const current = safeLstat(sidecar.path)
-      if (!current || !current.isFile()) continue
-      if (current.mtimeMs >= cutoffMs || current.size !== sidecar.sizeBytes || (sidecar.inode !== undefined && current.ino !== sidecar.inode)) {
-        result.skippedRecent += 1
-        continue
-      }
-      unlinkSync(sidecar.path)
-      result.deleted += 1
-    } catch (error) {
-      if (isMissingFileError(error)) continue
-      result.errors.push({ path: sidecar.path, message: error instanceof Error ? error.message : String(error) })
     }
   }
   return result

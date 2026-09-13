@@ -12,6 +12,7 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
@@ -23,10 +24,22 @@ jobs:
       - run: node --version && pnpm --version
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
+      - name: Verify reproducible randomized test order
+        run: pnpm test --test-randomize --test-random-seed=4180762113
+      - name: Collect diagnostic coverage (loaded files only)
+        run: pnpm test:coverage > coverage.txt 2>&1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-coverage
+          path: coverage.txt
+          if-no-files-found: ignore
 
   docker:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
+    env:
+      YANXING_TEST_IMAGE: yanxing:ci-test
     steps:
       - uses: actions/checkout@v4
         with:
@@ -34,6 +47,51 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
+      - uses: pnpm/action-setup@v4
+      - run: pnpm install --frozen-lockfile
       - uses: docker/setup-buildx-action@v3
+      - name: Build the image shared by both container suites
+        run: |
+          docker pull node:24.20.0-bookworm-slim
+          docker build --tag "$YANXING_TEST_IMAGE" .
       - name: Build image and exercise isolated deployment
         run: sh scripts/test-docker.sh
+      - name: Exercise opt-in process classification and recovery tests
+        env:
+          YANXING_PROC_ROLE_DOCKER_TESTS: "1"
+        run: pnpm test test/proc-role-scan.test.mjs --test-timeout=480000
+
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      YANXING_NEXT_DIST_DIR: .next-browser-ci
+      YANXING_BROWSER_ARTIFACTS_ROOT: ${{ runner.temp }}/browser-artifacts
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - uses: pnpm/action-setup@v4
+      - run: pnpm install --frozen-lockfile
+      - name: Locate the runner browser
+        run: |
+          chrome=$(command -v google-chrome)
+          "$chrome" --version
+          echo "YANXING_BROWSER_EXECUTABLE=$chrome" >> "$GITHUB_ENV"
+      - run: pnpm build:runtime
+      - run: pnpm build
+      - name: Exercise real submission retry and UI interactions
+        run: pnpm test:browser
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-diagnostics
+          path: |
+            ${{ runner.temp }}/browser-artifacts/**/*.png
+            ${{ runner.temp }}/browser-artifacts/**/*.log
+            ${{ runner.temp }}/browser-artifacts/**/summary.json
+            ${{ runner.temp }}/browser-artifacts/**/ponytail-metrics.json
+          if-no-files-found: ignore

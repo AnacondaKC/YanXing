@@ -9,7 +9,7 @@ process.env.YANXING_DATABASE_PATH = path.join(directory, 'authz-test.sqlite')
 process.env.YANXING_SETTINGS_ENCRYPTION_KEY = 'authz-test-encryption-key'
 
 const { createOrUpdateUser, createSession, sessionCookieName } = await import('../lib/auth/session')
-import type { AuthUser } from '../lib/auth/session'
+import type { SessionUser as AuthUser } from '../modules/users/domain'
 const { getDatabase } = await import('../lib/db/client')
 const { createNativeProject, submitNativeReport } = await import('./helpers/native-project')
 const { GET: getAiSettings } = await import('../app/api/admin/ai-settings/route')

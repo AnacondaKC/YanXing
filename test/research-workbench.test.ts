@@ -13,6 +13,9 @@ import {
   resolveHistoricalWorkbenchTitle,
   resolveWorkbenchAnalysisAction,
 } from '../components/research-workbench'
+import { HeatmapVisualization } from '../components/research-visualization-card'
+import { RESEARCH_METHODS } from '../modules/contracts/analysis'
+import type { HeatmapData } from '../lib/rendering/visualizations'
 
 test('idle workbench keeps update report next to the analysis action', () => {
   const scenarios: { label: string; props: Partial<ComponentProps<typeof ResearchWorkbench>> }[] = [
@@ -108,4 +111,67 @@ test('analysis result display keeps previous data during rerun and marks stale a
   assert.equal(analysisResultPlaceholder('failed'), '分析未完成，请重新启动。')
   assert.equal(analysisResultPlaceholder('cancelled'), '分析已停止，可重新启动。')
   assert.equal(analysisResultPlaceholder('empty'), '暂无数据，请先启动AI分析。')
+})
+
+function heatmapFixture(rows: Array<{ id: string; label: string; values: number[] }>): HeatmapData {
+  return {
+    columns: [...RESEARCH_METHODS],
+    rows: rows.map((row) => ({
+      id: row.id,
+      label: row.label,
+      cells: row.values.map((value, index) => ({
+        columnId: RESEARCH_METHODS[index]?.id ?? String(index),
+        value,
+        ratio: Math.max(0, Math.min(1, value / 100)),
+      })),
+    })),
+  }
+}
+
+function heatmapHtml(data: HeatmapData, isExpanded?: boolean) {
+  return renderToStaticMarkup(createElement(HeatmapVisualization, { data, isExpanded }))
+}
+
+function heatmapCells(html: string) {
+  return [...html.matchAll(/<g><title>([^<]*)<\/title><rect ([^>]+)><\/rect><text ([^>]*)>([^<]*)<\/text><\/g>/g)].map((match) => ({
+    title: match[1],
+    rect: match[2],
+    text: match[3],
+    body: match[4],
+  }))
+}
+
+test('heatmap native svg keeps original visx cell geometry, contrast and empty text', () => {
+  const html = heatmapHtml(heatmapFixture([{ id: 'h1', label: '正文', values: [100, 55, 30, 0, 0, 45] }]))
+  const cells = heatmapCells(html)
+  assert.equal(cells.length, 6)
+  assert.equal(html.includes('<g><title>正文 / 文献综述：100% 使用强度</title><rect x="74" y="40" width="52" height="30" rx="6" fill="var(--yx-brand)"></rect><text x="100" y="55" text-anchor="middle" dominant-baseline="central" fill="var(--yx-paper)" font-size="10" font-weight="700">100%</text></g>'), true)
+  assert.equal(html.includes('<g><title>正文 / 定性分析：55% 使用强度</title><rect x="74" y="80" width="52" height="30" rx="6" fill="var(--yx-muted)"></rect><text x="100" y="95" text-anchor="middle" dominant-baseline="central" fill="var(--yx-paper)" font-size="10" font-weight="700">55%</text></g>'), true)
+  assert.equal(html.includes('<g><title>正文 / 案例研究：0% 使用强度</title><rect x="74" y="160" width="52" height="30" rx="6" fill="var(--yx-paper)"></rect><text x="100" y="175" text-anchor="middle" dominant-baseline="central" fill="var(--yx-ink)" font-size="10" font-weight="700"></text></g>'), true)
+  assert.match(html, /viewBox="0 0 152 294"/)
+  assert.match(html, /overflow-auto p-2/)
+  assert.doesNotMatch(html, /visx-heatmap/)
+
+  const expanded = heatmapHtml(heatmapFixture([{ id: 'h1', label: '正文', values: [100, 55, 30, 0, 0, 45] }]), true)
+  assert.equal(expanded.includes('<g><title>正文 / 文献综述：100% 使用强度</title><rect x="92" y="40" width="70" height="38" rx="6" fill="var(--yx-brand)"></rect><text x="127" y="59" text-anchor="middle" dominant-baseline="central" fill="var(--yx-paper)" font-size="12" font-weight="700">100%</text></g>'), true)
+
+  const empty = heatmapHtml(heatmapFixture([]))
+  assert.equal(heatmapCells(empty).length, 0)
+  assert.match(empty, /viewBox="0 0 90 294"/)
+  assert.match(empty, /<title>文献综述<\/title>文献综述/)
+  assert.match(empty, /较少/)
+  assert.match(empty, /较多/)
+
+  const long = heatmapHtml(heatmapFixture([
+    { id: 'h1', label: '绪论非常长的章节标题', values: [100, 55, 0, 12, 80, 1] },
+    { id: 'h2', label: '方法', values: [0, 0, 0, 0, 0, 0] },
+    { id: 'h3', label: '结论', values: [54, 55, 56, 99, 100, 40] },
+  ]))
+  assert.match(long, /<title>绪论非常长的章节标题<\/title>绪论非常…/)
+  assert.equal(heatmapCells(long).length, 18)
+  assert.equal(long.includes('<g><title>结论 / 对比分析：40% 使用强度</title><rect x="198" y="240" width="52" height="30" rx="6" fill="#b4b2ad"></rect><text x="224" y="255" text-anchor="middle" dominant-baseline="central" fill="var(--yx-ink)" font-size="10" font-weight="700">40%</text></g>'), true)
+
+  const missing = heatmapHtml(heatmapFixture([{ id: 'h1', label: '正文', values: [100] }]))
+  assert.equal(heatmapCells(missing).length, 6)
+  assert.match(missing, /正文 \/ 对比分析：0% 使用强度/)
 })

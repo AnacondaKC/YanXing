@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { planStageReportSubmission } from '../modules/projects/stage-workflow'
 import {
   STAGE_FIELD_LIMITS,
   StageWorkflowError,
@@ -7,12 +8,11 @@ import {
   assertValidStageWorkflow,
   initializeStageWorkflow,
   isStagePlanFrozen,
-  planStageReportSubmission,
   type ProjectWorkflow,
   type StagePlanInput,
   type StageReportSubmissionCommand,
   type StageWorkflowErrorCode,
-} from '../modules/projects/stage-workflow'
+} from '../modules/projects/stage-domain'
 
 const STARTED_AT = '2026-03-01T00:00:00.000Z'
 const T1 = '2026-03-02T00:00:00.000Z'

@@ -15,7 +15,6 @@ import {
 } from '@/lib/storage/stream-utils'
 
 export { getReportStorageRoot, getTemporaryStorageRoot } from '@/lib/storage/runtime-roots'
-export const reportStorageRoot = getReportStorageRoot()
 const docxMimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
 const pdfMimeType = 'application/pdf'
 
