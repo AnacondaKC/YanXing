@@ -152,51 +152,47 @@ pnpm status
 
 ## 生产部署
 
-当前采用**课题 → 阶段 → 不可变报告提交**原生模型。**新项目，不做旧库迁移、历史兼容或双模运行。** 旧库/混合库启动会明确拒绝；不要把新镜像指向现有旧卷，不要清空旧数据绕过检查。
+当前源码（`main` / 0.2.0）采用**课题 → 阶段 → 不可变报告提交**模型。只初始化空库或校验同一 schema 的原生库，**不迁移旧库、不做双模运行**。旧库或混合库启动会明确拒绝；不要把当前镜像指向 v0.1.x 数据卷，也不要清空旧数据绕过检查。
 
-P5 本轮按用户确认只做隔离验收，**未切换正式实例、未推送正式镜像**。已有版本号或 GHCR 标签不能证明包含本轮原生实现。验收范围、发布候选和恢复操作见 [P5 发布验收记录](docs/project-stage-report-p5-acceptance.md)。
+已发布的 GHCR 标签（如 `v0.1.2`）对应历史版本，**不包含**当前原生实现。在对应 GitHub Release 的 CI、Docker 验收与镜像发布完成前，请用本仓库源码本地构建（默认 `yanxing:local`），不要把 `latest` 或旧标签当作当前 `main`。完整配置、HTTPS、密钥保管与恢复步骤见 [Docker 部署指南](docs/docker-deployment.md)。
 
 ### Docker Compose
 
-使用匹配的原生镜像与 Compose，单个 app 服务由 supervisor 管理 Web/Worker。正式部署前明确新项目名、新数据卷、域名/端口和稳定密钥；以下仅为未来新部署示例，本轮没有执行。
-
-
-env 文件使用独立名称，避免覆盖当前配置：
+单个 `app` 服务由 supervisor 管理 Web 与 Worker。默认 Compose 项目名为 `yanxing`，数据卷为 `yanxing_data`，配置文件为 `.env`。若宿主机已有同名项目或卷，改用 `-p <新项目名>` 并确认产生的是新卷，不要复用旧实例数据。
 
 ```bash
-# .env.native 已存在时不要覆盖，先核对配置。
-test ! -e .env.native && cp .env.example .env.native
-chmod 600 .env.native
-# 编辑 .env.native：保存一次性生成的固定 YANXING_SETTINGS_ENCRYPTION_KEY；
-# 设置新的 YANXING_IMAGE 标签、确认端口，并配置模型渠道。
-export YANXING_ENV_FILE=.env.native
-docker compose --env-file .env.native -p yanxing-native config --quiet
-# 确认 yanxing-native_data 是本次新卷，且目标端口没有被现有实例占用后：
-docker compose --env-file .env.native -p yanxing-native up -d --build --wait --wait-timeout 180
+# .env 已存在时不要覆盖，先核对配置。
+test ! -e .env && cp .env.example .env
+chmod 600 .env
+# 编辑 .env：保存一次性生成的固定 YANXING_SETTINGS_ENCRYPTION_KEY；
+# 确认端口并配置模型渠道。对应 GHCR 标签可用前保持默认 YANXING_IMAGE=yanxing:local。
+docker compose --env-file .env config --quiet
+# 确认 yanxing_data 是本次新卷，且目标端口没有被现有实例占用后：
+docker compose --env-file .env up -d --build --wait --wait-timeout 180
 ```
 
-创建管理员（只对上述新实例）：
+创建管理员：
 
 ```bash
 read -rsp "管理员密码: " YANXING_ADMIN_PASSWORD; echo
 export YANXING_ADMIN_PASSWORD
-docker compose --env-file .env.native -p yanxing-native exec -e YANXING_ADMIN_PASSWORD app /app/scripts/docker-entrypoint.sh user:create
+docker compose --env-file .env run --rm -e YANXING_ADMIN_PASSWORD app user:create
 unset YANXING_ADMIN_PASSWORD
 ```
 
-正式登录须通过 HTTPS；默认仅绑定 127.0.0.1:3000。生产应钉选经本轮原生验收的确切镜像 digest，不使用不明 latest，也不覆盖已有回退镜像标签。共享默认上限为 4 GiB/4 CPU，Worker 并发 1～3；SQLite 不支持多主机共享或 scale app=2。
+正式登录须通过 HTTPS；默认仅绑定 127.0.0.1:3000。经反向代理暴露时，仅当 Web 只能经可信代理访问才开启 `YANXING_TRUST_PROXY`。生产应钉选已验收镜像的 digest，不使用不明 `latest`，也不覆盖用于回退的旧标签。共享默认上限为 4 GiB/4 CPU，Worker 并发 1～3；SQLite 不支持多主机共享或 `scale app=2`。
 
-普通停机使用 stop 或不带 -v 的 down；**不要删除数据卷**。完整配置、HTTPS 和密钥保管见 [Docker 部署指南](docs/docker-deployment.md)。
+普通停机使用 `stop` 或不带 `-v` 的 `down`；**不要删除数据卷**。
 
 ### Node.js
 
-先明确全新的绝对运行目录，并通过 YANXING_DATABASE_PATH 指定其中的 SQLite；配置并保管固定 YANXING_SETTINGS_ENCRYPTION_KEY。不要复用当前旧 storage/，不要在现有实例未确认停机时运行 restart。
+先明确全新的绝对运行目录，并通过 `YANXING_DATABASE_PATH` 指定其中的 SQLite；配置并保管固定 `YANXING_SETTINGS_ENCRYPTION_KEY`。不要复用当前旧 `storage/`，不要在现有实例未确认停机时运行 `restart`。
 
-构建使用 pnpm build:runtime 与 pnpm build；启动入口仍为 pnpm start，状态查看为 pnpm status。首次原生初始化命令仍叫 db:migrate，但只初始化空库或校验已有原生库，不迁移旧模型。
+构建使用 `pnpm build:runtime` 与 `pnpm build`；启动入口仍为 `pnpm start`，状态查看为 `pnpm status`。首次原生初始化命令仍叫 `db:migrate`，但只初始化空库或校验已有原生库，不迁移旧模型。
 
 ### 同模型备份与恢复
 
-使用 pnpm backup:native --help 查看显式路径命令。原生备份包括 SQLite 一致性快照、正式/墓碑报告文件、知识资料、审计及加密设置；**主密钥另行保管，不放入归档**。恢复须使用同一 schema、同一绑定路径和同一密钥，不覆盖现有数据，不以旧模型降级代替恢复。
+使用 `pnpm backup:native --help` 查看显式路径命令。原生备份包括 SQLite 一致性快照、正式/墓碑报告文件、知识资料、审计及加密设置；**主密钥另行保管，不放入归档**。恢复须使用同一 schema、同一绑定路径和同一密钥，不覆盖现有数据，不以旧模型降级代替恢复。
 
 ## 技术架构
 
@@ -216,7 +212,7 @@ flowchart LR
 | 应用与界面 | Next.js 16 · React 19 · TypeScript · Tailwind CSS 4 |
 | 数据与任务 | Node.js 内置 SQLite · 独立 Worker · SSE |
 | 文档处理 | Mammoth · pdf-parse · docx-preview |
-| 可视化 | Visx · 自定义图表组件 |
+| 可视化 | Visx（词云 / 思维导图）· 原生 SVG 热力图 |
 | 工程与部署 | pnpm · node:test · Docker Compose · GitHub Actions |
 
 <details>
@@ -247,12 +243,15 @@ storage/            本地运行数据，不纳入版本管理
 | `pnpm db:migrate` | 初始化空库或校验原生结构（旧库拒绝，不迁移） |
 | `pnpm user:create` | 创建或更新用户 |
 | `pnpm storage:reconcile` | 存储对账与维护 |
+| `pnpm backup:native` | 原生备份与恢复；先查看 `--help` |
 | `pnpm typecheck` | TypeScript 类型检查 |
 | `pnpm lint` | 类型检查及未使用变量 / 参数检查 |
 | `pnpm test` | 运行自动化测试 |
+| `pnpm test:coverage` | 运行测试并输出覆盖率诊断 |
+| `pnpm test:browser` | 真实浏览器冒烟（需本机 Chrome，不调用付费模型） |
 | `pnpm check` | 依次执行 lint、test、build |
 
-持续集成执行代码检查、测试、构建及 Docker 部署验证，具体步骤见 [CI 工作流](.github/workflows/ci.yml)。GitHub Release 发布后，[镜像发布工作流](.github/workflows/docker-release.yml) 会先调用该 CI，两者均通过后再构建并推送 GHCR 镜像。
+持续集成执行类型检查、测试（含固定种子的随机顺序）、覆盖率产物、真实浏览器交互、构建及 Docker 部署验证，具体步骤见 [CI 工作流](.github/workflows/ci.yml)。GitHub Release 发布后，[镜像发布工作流](.github/workflows/docker-release.yml) 会先调用该 CI，两者均通过后再构建并推送 GHCR 镜像。
 
 ### 常见问题
 
