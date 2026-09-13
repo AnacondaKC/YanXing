@@ -1,15 +1,35 @@
-/** 总览指标卡与课题详情卡共用的光晕、同心圆与顶部高光。 */
-export function CardAura({ showTopHighlight = true }: { showTopHighlight?: boolean } = {}) {
+/** 总览指标卡与课题详情卡共用的光晕与同心圆。 */
+export function CardAura({ showRings = true }: { showRings?: boolean } = {}) {
   return (
     <>
       <div className="absolute -right-10 -top-12 h-28 w-28 rounded-full bg-yx-brand-bright/12 blur-2xl" />
       <div className="absolute -bottom-12 -left-10 h-24 w-24 rounded-full bg-yx-brand/[0.06] blur-2xl" />
-      <div className="absolute -right-7 -top-7 h-[4.75rem] w-[4.75rem] rounded-full border border-yx-brand/[0.12]" />
-      <div className="absolute -right-3 -top-3 h-12 w-12 rounded-full border border-yx-brand/[0.08]" />
+      {showRings ? (
+        <>
+          <div className="absolute -right-7 -top-7 h-[4.75rem] w-[4.75rem] rounded-full border border-yx-brand/[0.12]" />
+          <div className="absolute -right-3 -top-3 h-12 w-12 rounded-full border border-yx-brand/[0.08]" />
+        </>
+      ) : null}
       <span className="absolute right-[38%] top-3 h-1 w-1 rounded-full bg-yx-brand-bright/40" />
       <span className="absolute bottom-[28%] right-[22%] h-1.5 w-1.5 rounded-full bg-yx-brand/25" />
-      {showTopHighlight ? <div className="absolute inset-x-6 top-0 h-px bg-gradient-to-r from-transparent via-yx-brand-bright/30 to-transparent" /> : null}
     </>
+  )
+}
+
+/** 空状态全幅面板：总览光晕 + 2 倍比同心环（右上 16/8，左下 8/4），圆心落在角点。 */
+export function EmptyPanelDecoration() {
+  return (
+    <div aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden">
+      <CardAura showRings={false} />
+      <div className="absolute -right-32 -top-32 h-64 w-64">
+        <div className="absolute inset-0 rounded-full border border-yx-brand/[0.08]" />
+        <div className="absolute inset-16 rounded-full border border-yx-brand/[0.12]" />
+      </div>
+      <div className="absolute -bottom-16 -left-16 h-32 w-32">
+        <div className="absolute inset-0 rounded-full border border-dashed border-yx-brand/[0.08]" />
+        <div className="absolute inset-8 rounded-full border border-yx-brand/[0.08]" />
+      </div>
+    </div>
   )
 }
 

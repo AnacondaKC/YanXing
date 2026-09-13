@@ -21,43 +21,29 @@ import { combineOverviewLoadStates, type OverviewLoadState } from '@/lib/overvie
 import { EmptyState } from '@/components/ui/empty-state'
 import { formatCharacters, formatDate, formatMetric, formatRelativeTime, scoreTextClass } from '@/lib/format'
 import { cumulativeTrend, runningAverageValues, trendDirectionOf, type TrendDirection } from '@/lib/overview-trends'
+import {
+  averageDefinedInteger,
+  countSince,
+  dynamicOverviewSubtitle,
+  greetingOf,
+  isActiveProject,
+  isDefinedScore,
+  isQualityRiskProject,
+  qualityBandOf,
+  recentProjectActivities,
+  submissionTrendOf,
+  submittedReportCountOf,
+  type ProjectActivityKind,
+  type QualityBand,
+} from '@/lib/overview-presentation'
 import { CardAura } from '@/components/ui/card-decoration'
-import type { KnowledgeItem, OverviewStats, ReportWithProject } from '@/components/workspace-types'
-import type { ProjectWithCapabilities } from '@/modules/projects/domain'
-
-type QualityBand = 'excellent' | 'good' | 'weak' | 'unanalyzed'
+import type { WorkspaceKnowledgeCard, WorkspaceOverviewStats, WorkspaceProjectListItem, WorkspaceReportCard } from '@/lib/workspace-submission'
 
 const qualityBandMeta: Record<QualityBand, { label: string; bar: string; dot: string; text: string }> = {
   excellent: { label: '优秀 ≥ 80', bar: 'bg-yx-brand', dot: 'bg-yx-brand', text: 'text-yx-brand-hover' },
   good: { label: '良好 60–79', bar: 'bg-yx-brand-bright', dot: 'bg-yx-brand-bright', text: 'text-yx-brand-hover' },
   weak: { label: '待提升 < 60', bar: 'bg-yx-warning', dot: 'bg-yx-warning', text: 'text-yx-warning-text' },
   unanalyzed: { label: '待分析', bar: 'bg-yx-line', dot: 'bg-yx-line', text: 'text-yx-faint' },
-}
-
-function qualityBandOf(score: number | undefined): QualityBand {
-  if (score === undefined) return 'unanalyzed'
-  if (score >= 80) return 'excellent'
-  if (score >= 60) return 'good'
-  return 'weak'
-}
-
-function timestampsNear(left: string, right: string, ms = 2500) {
-  const a = new Date(left).getTime()
-  const b = new Date(right).getTime()
-  if (Number.isNaN(a) || Number.isNaN(b)) return false
-  return Math.abs(a - b) <= ms
-}
-
-type ProjectActivityKind = 'analyzing' | 'analyzed' | 'failed' | 'upload' | 'edit' | 'created'
-
-type ProjectActivity = {
-  id: string
-  project: ProjectWithCapabilities
-  report?: ReportWithProject
-  kind: ProjectActivityKind
-  at: string
-  label: string
-  detail: string
 }
 
 const projectActivityMeta: Record<ProjectActivityKind, { icon: typeof Sparkles; iconWrap: string; iconClass: string }> = {
@@ -67,100 +53,6 @@ const projectActivityMeta: Record<ProjectActivityKind, { icon: typeof Sparkles; 
   upload: { icon: Upload, iconWrap: 'bg-yx-brand', iconClass: 'h-3.5 w-3.5 text-white' },
   edit: { icon: Pencil, iconWrap: 'bg-yx-ink', iconClass: 'h-3.5 w-3.5 text-white' },
   created: { icon: FolderPlus, iconWrap: 'bg-yx-ink', iconClass: 'h-3.5 w-3.5 text-white' },
-}
-
-function versionLabel(version: number) {
-  return 'v' + String(version).padStart(2, '0')
-}
-
-function reportActivityAt(report: ReportWithProject) {
-  return report.sourceUpdatedAt || report.createdAt
-}
-
-function latestProjectActivity(project: ProjectWithCapabilities, projectReports: ReportWithProject[]): ProjectActivity {
-  const latestReport = projectReports[0]
-  const analyzingReport = projectReports.find((report) => report.latestJobStatus === 'queued' || report.latestJobStatus === 'running')
-  const looksLikeUpload = projectReports.some((report) => timestampsNear(project.updatedAt, reportActivityAt(report)))
-  const isFreshCreate = timestampsNear(project.updatedAt, project.createdAt)
-
-  if (analyzingReport) {
-    return { id: project.id, project, report: analyzingReport, kind: 'analyzing', at: reportActivityAt(analyzingReport), label: '正在分析', detail: versionLabel(analyzingReport.version) }
-  }
-
-  let activity: ProjectActivity
-  if (latestReport?.latestJobStatus === 'failed') {
-    activity = { id: project.id, project, report: latestReport, kind: 'failed', at: reportActivityAt(latestReport), label: '分析失败', detail: versionLabel(latestReport.version) }
-  } else if (latestReport?.latestJobStatus === 'cancelled') {
-    activity = { id: project.id, project, report: latestReport, kind: 'failed', at: reportActivityAt(latestReport), label: '分析已取消', detail: versionLabel(latestReport.version) }
-  } else if (latestReport && (latestReport.aiScore !== undefined || latestReport.hasCompletedFullAnalysis)) {
-    activity = { id: project.id, project, report: latestReport, kind: 'analyzed', at: reportActivityAt(latestReport), label: '完成分析', detail: latestReport.aiScore !== undefined ? latestReport.aiScore + ' 分' : versionLabel(latestReport.version) }
-  } else if (latestReport) {
-    activity = { id: project.id, project, report: latestReport, kind: 'upload', at: reportActivityAt(latestReport), label: '上传报告', detail: versionLabel(latestReport.version) }
-  } else if (!isFreshCreate) {
-    activity = { id: project.id, project, kind: 'edit', at: project.updatedAt, label: '更新课题', detail: '课题信息已修改' }
-  } else {
-    activity = { id: project.id, project, kind: 'created', at: project.createdAt, label: '新设立课题', detail: '等待上传报告' }
-  }
-
-  if (activity.kind !== 'analyzing' && !isFreshCreate && !looksLikeUpload && project.updatedAt > activity.at) {
-    return { id: project.id, project, kind: 'edit', at: project.updatedAt, label: '更新课题', detail: '课题信息已修改' }
-  }
-  return activity
-}
-
-function greetingOf(date: Date) {
-  const hour = date.getHours()
-  if (hour < 5) return '夜深了'
-  if (hour < 9) return '早上好'
-  if (hour < 12) return '上午好'
-  if (hour < 14) return '中午好'
-  if (hour < 18) return '下午好'
-  return '晚上好'
-}
-
-function dynamicOverviewSubtitle(params: {
-  runningJobs: number
-  queuedJobs: number
-  atRiskCount: number
-  activeProjectsCount: number
-  totalReportVersions: number
-  weeklyNewReports: number
-  averageAiScore: number
-  hasProjects: boolean
-  hasReports: boolean
-}) {
-  const {
-    runningJobs,
-    queuedJobs,
-    atRiskCount,
-    activeProjectsCount,
-    totalReportVersions,
-    weeklyNewReports,
-    averageAiScore,
-    hasProjects,
-    hasReports,
-  } = params
-
-  if (!hasProjects) {
-    return '当前暂无在研课题，建议创建新课题以开启全流程分析与报告追踪。'
-  }
-  if (!hasReports) {
-    return `已纳管 ${activeProjectsCount} 个在研课题，上传首份报告即可自动触发全维度 AI 深度分析。`
-  }
-  const pendingJobs = runningJobs + queuedJobs
-  if (pendingJobs > 0) {
-    return `当前有 ${pendingJobs} 个分析任务正在处理中，分析结果与质量评分将实时同步。`
-  }
-  if (atRiskCount > 0) {
-    return `共有 ${activeProjectsCount} 个在研课题，其中 ${atRiskCount} 个课题评分偏低或存在风险，建议优先查阅。`
-  }
-  if (weeklyNewReports > 0) {
-    return `近 7 天已更新 ${weeklyNewReports} 版报告，平均 AI 分析得分为 ${averageAiScore ? `${averageAiScore} 分` : '--'}，研究进展活跃。`
-  }
-  if (averageAiScore >= 80) {
-    return `在研课题整体质量表现优秀（平均 ${averageAiScore} 分），持续为研究决策提供高质量支撑。`
-  }
-  return `全库纳管 ${activeProjectsCount} 个在研课题与 ${totalReportVersions} 版研报，AI 深度分析与质量全景保持最新。`
 }
 
 function HeroTrendMark({ direction }: { direction: TrendDirection }) {
@@ -186,11 +78,11 @@ const PANEL_SHELL = 'relative overflow-hidden rounded-lg border border-yx-line b
 
 type PanelKind = 'quality' | 'reports' | 'knowledge'
 
-/** 右下角主题插画：与报告版本总数等指标卡同一位置、同一透明度。 */
+/** 右下角主题插画：与报告提交总数等指标卡同一位置、同一透明度。 */
 function PanelDecoration({ kind }: { kind: PanelKind }) {
   return (
     <div aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden">
-      <CardAura showTopHighlight={false} />
+      <CardAura />
 
       {kind === 'quality' ? (
         <svg className="absolute -bottom-1 right-1.5 h-[3.75rem] w-[3.75rem] text-yx-brand/42" viewBox="0 0 56 56" fill="none">
@@ -294,7 +186,7 @@ function MiniSparkline({
   )
 }
 
-/** 面板内嵌指标行：与顶部「报告版本总数」卡片同一套数字 + 走势图结构。 */
+/** 面板内嵌指标行：与顶部「报告提交总数」卡片同一套数字 + 走势图结构。 */
 function MetricSparkRow({
   label,
   value,
@@ -383,7 +275,7 @@ type StatCardKind = 'versions' | 'characters' | 'success' | 'knowledge'
 function StatCardDecoration({ kind }: { kind: StatCardKind }) {
   return (
     <div aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden">
-      <CardAura showTopHighlight={false} />
+      <CardAura />
 
       {kind === 'versions' ? (
         <svg className="absolute -bottom-1.5 -right-1 h-[3.75rem] w-[3.75rem] text-yx-brand/45" viewBox="0 0 56 56" fill="none">
@@ -455,6 +347,21 @@ function StatTrendSparkline({ points, gradientId }: { points: number[]; gradient
 
 const OVERVIEW_ENTRANCE_SETTLE_MS = 650
 
+export type OverviewWorkspaceProps = {
+  projectsState: OverviewLoadState
+  statsState: OverviewLoadState
+  projects: WorkspaceProjectListItem[]
+  stats?: WorkspaceOverviewStats
+  recentReports: WorkspaceReportCard[]
+  activityReports: WorkspaceReportCard[]
+  knowledgeItems: WorkspaceKnowledgeCard[]
+  upstreamError?: string
+  userName?: string
+  onSelect: (project: WorkspaceProjectListItem) => void
+  onNavigate: (nav: 'reports' | 'knowledge') => void
+  onOpenReport: (report: WorkspaceReportCard, project: WorkspaceProjectListItem) => void
+}
+
 export function OverviewWorkspace({
   projectsState,
   statsState,
@@ -468,20 +375,7 @@ export function OverviewWorkspace({
   onSelect,
   onNavigate,
   onOpenReport,
-}: {
-  projectsState: OverviewLoadState
-  statsState: OverviewLoadState
-  projects: ProjectWithCapabilities[]
-  stats?: OverviewStats
-  recentReports: ReportWithProject[]
-  activityReports: ReportWithProject[]
-  knowledgeItems: KnowledgeItem[]
-  upstreamError?: string
-  userName?: string
-  onSelect: (project: ProjectWithCapabilities) => void
-  onNavigate: (nav: 'reports' | 'knowledge') => void
-  onOpenReport: (report: ReportWithProject, project: ProjectWithCapabilities) => void
-}) {
+}: OverviewWorkspaceProps) {
   const [entering, setEntering] = useState(true)
   const combinedState = combineOverviewLoadStates(projectsState, statsState)
 
@@ -492,37 +386,19 @@ export function OverviewWorkspace({
     return () => window.clearTimeout(timer)
   }, [entering, projectsState, statsState])
 
-  const analyzedProjects = useMemo(() => projects.filter((project) => project.latestReport?.aiScore !== undefined), [projects])
-  const { averageAiScore, averageCompleteness } = useMemo(() => {
-    if (!analyzedProjects.length) return { averageAiScore: 0, averageCompleteness: 0 }
-    const totals = analyzedProjects.reduce((result, project) => ({
-      aiScore: result.aiScore + (project.latestReport?.aiScore ?? 0),
-      completeness: result.completeness + (project.latestReport?.completeness ?? 0),
-    }), { aiScore: 0, completeness: 0 })
-    return {
-      averageAiScore: Math.round(totals.aiScore / analyzedProjects.length),
-      averageCompleteness: Math.round(totals.completeness / analyzedProjects.length),
-    }
-  }, [analyzedProjects])
-  const reportsByProject = useMemo(() => {
-    const result = new Map<string, ReportWithProject[]>()
-    for (const report of activityReports) {
-      const reports = result.get(report.projectId)
-      if (reports) reports.push(report)
-      else result.set(report.projectId, [report])
-    }
-    return result
-  }, [activityReports])
+  const analyzedProjects = useMemo(() => projects.filter((project) => isDefinedScore(project.latestSubmission?.aiScore)), [projects])
+  const averageAiScore = useMemo(() => averageDefinedInteger(analyzedProjects.map((project) => project.latestSubmission?.aiScore)), [analyzedProjects])
+  const averageCompleteness = useMemo(() => averageDefinedInteger(analyzedProjects.map((project) => project.latestSubmission?.completeness)), [analyzedProjects])
 
   const qualityBands = useMemo(() => {
-    const bands: Record<QualityBand, ProjectWithCapabilities[]> = { excellent: [], good: [], weak: [], unanalyzed: [] }
-    for (const project of projects) bands[qualityBandOf(project.latestReport?.aiScore)].push(project)
+    const bands: Record<QualityBand, WorkspaceProjectListItem[]> = { excellent: [], good: [], weak: [], unanalyzed: [] }
+    for (const project of projects) bands[qualityBandOf(project.latestSubmission?.aiScore)].push(project)
     return bands
   }, [projects])
 
   const { analyzedTrend, unanalyzedTrend } = useMemo(() => {
     const analyzed = overviewStats?.trends.analyzedProjects
-      ?? cumulativeTrend(projects.flatMap((project) => project.latestReport?.aiScore === undefined ? [] : [{ at: project.updatedAt, value: 1 }]))
+      ?? cumulativeTrend(projects.flatMap((project) => isDefinedScore(project.latestSubmission?.aiScore) ? [{ at: project.updatedAt, value: 1 }] : []))
     const created = cumulativeTrend(projects.map((project) => ({ at: project.createdAt, value: 1 })))
     return {
       analyzedTrend: analyzed,
@@ -531,46 +407,43 @@ export function OverviewWorkspace({
   }, [overviewStats?.trends.analyzedProjects, projects])
 
   const { bestProject, weakestProject } = useMemo(() => ({
-    bestProject: analyzedProjects.reduce<ProjectWithCapabilities | undefined>((best, project) => (best && (best.latestReport?.aiScore ?? 0) >= (project.latestReport?.aiScore ?? 0) ? best : project), undefined),
-    weakestProject: analyzedProjects.reduce<ProjectWithCapabilities | undefined>((weakest, project) => (weakest && (weakest.latestReport?.aiScore ?? 100) <= (project.latestReport?.aiScore ?? 100) ? weakest : project), undefined),
+    bestProject: analyzedProjects.reduce<WorkspaceProjectListItem | undefined>((best, project) => {
+      const bestScore = best?.latestSubmission?.aiScore
+      const score = project.latestSubmission?.aiScore
+      if (!isDefinedScore(score)) return best
+      return isDefinedScore(bestScore) && bestScore >= score ? best : project
+    }, undefined),
+    weakestProject: analyzedProjects.reduce<WorkspaceProjectListItem | undefined>((weakest, project) => {
+      const weakestScore = weakest?.latestSubmission?.aiScore
+      const score = project.latestSubmission?.aiScore
+      if (!isDefinedScore(score)) return weakest
+      return isDefinedScore(weakestScore) && weakestScore <= score ? weakest : project
+    }, undefined),
   }), [analyzedProjects])
 
   const recentKnowledge = useMemo(() => knowledgeItems.slice(0, 4), [knowledgeItems])
-  const recentProjectActivities = useMemo(
-    () => projects.reduce<ProjectActivity[]>((recent, project) => {
-      const activity = latestProjectActivity(project, reportsByProject.get(project.id) ?? [])
-      const insertAt = recent.findIndex((item) => item.at < activity.at)
-      if (insertAt < 0 && recent.length >= 4) return recent
-      recent.splice(insertAt < 0 ? recent.length : insertAt, 0, activity)
-      if (recent.length > 4) recent.pop()
-      return recent
-    }, []),
-    [projects, reportsByProject],
+  const projectActivities = useMemo(
+    () => recentProjectActivities(projects, activityReports),
+    [projects, activityReports],
   )
   const recentReportScores = useMemo(() => recentReports
-    .flatMap((report) => report.aiScore === undefined ? [] : [report.aiScore])
+    .flatMap((report) => isDefinedScore(report.aiScore) ? [report.aiScore] : [])
     .reverse(), [recentReports])
-  const recentReportAverage = recentReportScores.length
-    ? Math.round(recentReportScores.reduce((total, score) => total + score, 0) / recentReportScores.length)
-    : undefined
+  const recentReportAverage = averageDefinedInteger(recentReportScores)
   const loadedKnowledgeCategoryCount = useMemo(() => new Set(knowledgeItems.map((item) => item.category).filter(Boolean)).size, [knowledgeItems])
   const knowledgeCategoryCount = overviewStats?.knowledgeCategoryCount ?? loadedKnowledgeCategoryCount
   const knowledgeTotal = overviewStats?.knowledgeCount ?? knowledgeItems.length
-  const activeProjects = useMemo(() => projects.filter((project) => project.status !== 'completed'), [projects])
-  const atRiskProjects = useMemo(() => projects.filter((project) => project.status === 'at_risk'), [projects])
+  const activeProjects = useMemo(() => projects.filter(isActiveProject), [projects])
+  const atRiskProjects = useMemo(() => projects.filter(isQualityRiskProject), [projects])
   const atRiskCount = atRiskProjects.length
-  const loadedWeeklyNewReports = useMemo(() => {
-    const weekAgo = Date.now() - 7 * 24 * 3600 * 1000
-    return recentReports.filter((report) => new Date(report.createdAt).getTime() >= weekAgo).length
-  }, [recentReports])
-  const loadedWeeklyNewKnowledge = useMemo(() => {
-    const weekAgo = Date.now() - 7 * 24 * 3600 * 1000
-    return knowledgeItems.filter((item) => new Date(item.createdAt).getTime() >= weekAgo).length
-  }, [knowledgeItems])
+  const loadedWeeklyNewReports = useMemo(() => countSince(recentReports.map((report) => report.submittedAt)), [recentReports])
+  const loadedWeeklyNewKnowledge = useMemo(() => countSince(knowledgeItems.map((item) => item.createdAt)), [knowledgeItems])
   const weeklyNewReports = overviewStats?.weeklyNewReports ?? loadedWeeklyNewReports
   const weeklyNewKnowledge = overviewStats?.weeklyNewKnowledge ?? loadedWeeklyNewKnowledge
   const jobTotal = overviewStats ? overviewStats.jobStats.completed + overviewStats.jobStats.failed + overviewStats.jobStats.cancelled : 0
   const jobSuccessRate = overviewStats && jobTotal ? Math.round((overviewStats.jobStats.completed / jobTotal) * 100) : undefined
+  const submittedReportCount = submittedReportCountOf(overviewStats, recentReports.length)
+  const submissionTrend = submissionTrendOf(overviewStats)
 
   const now = new Date()
   const weekDay = ['日', '一', '二', '三', '四', '五', '六'][now.getDay()]
@@ -578,30 +451,30 @@ export function OverviewWorkspace({
     const activeSeries = cumulativeTrend(activeProjects.map((project) => ({ at: project.createdAt, value: 1 })))
     const atRiskSeries = cumulativeTrend(atRiskProjects.map((project) => ({ at: project.updatedAt, value: 1 })))
     const scoreSeries = overviewStats?.trends.averageScore
-      ?? runningAverageTrend(recentReports.flatMap((report) => report.aiScore === undefined ? [] : [{ at: report.createdAt, value: report.aiScore }]))
+      ?? runningAverageTrend(recentReports.flatMap((report) => isDefinedScore(report.aiScore) ? [{ at: report.submittedAt, value: report.aiScore }] : []))
     return {
       在研课题: trendDirectionOf(activeSeries),
-      报告版本: trendDirectionOf(overviewStats?.trends?.versions ?? []),
+      报告提交: trendDirectionOf(submissionTrend),
       平均AI评分: analyzedProjects.length ? trendDirectionOf(scoreSeries) : 'flat' as const,
       需关注: trendDirectionOf(atRiskSeries),
     }
-  }, [activeProjects, analyzedProjects.length, atRiskProjects, overviewStats?.trends.averageScore, overviewStats?.trends.versions, recentReports])
+  }, [activeProjects, analyzedProjects.length, atRiskProjects, overviewStats?.trends.averageScore, recentReports, submissionTrend])
   const heroKpis = [
     { label: '在研课题', state: projectsState, value: String(activeProjects.length), trend: heroTrendByLabel.在研课题 },
-    { label: '报告版本', state: statsState, value: String(overviewStats?.totalReportVersions ?? 0), trend: heroTrendByLabel.报告版本 },
-    { label: '平均AI评分', state: projectsState, value: analyzedProjects.length ? String(averageAiScore) : '--', trend: heroTrendByLabel.平均AI评分 },
+    { label: '报告提交', state: statsState, value: String(overviewStats ? overviewStats.submittedReportCount : 0), trend: heroTrendByLabel.报告提交 },
+    { label: '平均AI评分', state: projectsState, value: isDefinedScore(averageAiScore) ? String(averageAiScore) : '--', trend: heroTrendByLabel.平均AI评分 },
     { label: '需关注', state: projectsState, value: String(atRiskCount), highlight: atRiskCount > 0, trend: heroTrendByLabel.需关注 },
   ]
 
   const trendByKind: Record<StatCardKind, number[]> = {
-    versions: overviewStats?.trends?.versions ?? [],
+    versions: submissionTrend,
     characters: overviewStats?.trends?.characters ?? [],
     success: overviewStats?.trends?.successRate ?? [],
     knowledge: overviewStats?.trends?.knowledge ?? [],
   }
 
   const statCards = [
-    { kind: 'versions' as const, label: '报告版本总数', value: String(overviewStats?.totalReportVersions ?? 0).padStart(2, '0'), helper: weeklyNewReports ? `近 7 天新增 ${weeklyNewReports} 版` : '累计上传的报告版本' },
+    { kind: 'versions' as const, label: '报告提交总数', value: String(overviewStats ? overviewStats.submittedReportCount : 0).padStart(2, '0'), helper: weeklyNewReports ? `近 7 天新增 ${weeklyNewReports} 份` : '累计上传的报告提交' },
     { kind: 'characters' as const, label: '累计报告字数', value: formatCharacters(overviewStats?.totalCharacters ?? 0), helper: '全部报告字符数总和' },
     { kind: 'success' as const, label: '分析任务成功率', value: jobSuccessRate === undefined ? '--' : `${jobSuccessRate}%`, helper: overviewStats ? `成功 ${overviewStats.jobStats.completed} · 失败 ${overviewStats.jobStats.failed} · 取消 ${overviewStats.jobStats.cancelled}${overviewStats.jobStats.running ? ` · 运行中 ${overviewStats.jobStats.running}` : ''}${overviewStats.jobStats.queued ? ` · 排队中 ${overviewStats.jobStats.queued}` : ''}` : '加载中' },
     { kind: 'knowledge' as const, label: '知识库资料', value: String(overviewStats?.knowledgeCount ?? knowledgeItems.length).padStart(2, '0'), helper: '行业研报与政策文件' },
@@ -613,19 +486,18 @@ export function OverviewWorkspace({
       queuedJobs: overviewStats?.jobStats.queued ?? 0,
       atRiskCount,
       activeProjectsCount: activeProjects.length,
-      totalReportVersions: overviewStats?.totalReportVersions ?? recentReports.length,
+      submittedReportCount,
       weeklyNewReports,
       averageAiScore,
       hasProjects: projects.length > 0,
-      hasReports: (overviewStats?.totalReportVersions ?? recentReports.length) > 0,
+      hasReports: submittedReportCount > 0,
     })
   }, [
     overviewStats?.jobStats.running,
     overviewStats?.jobStats.queued,
-    overviewStats?.totalReportVersions,
+    submittedReportCount,
     atRiskCount,
     activeProjects.length,
-    recentReports.length,
     weeklyNewReports,
     averageAiScore,
     projects.length,
@@ -695,15 +567,15 @@ export function OverviewWorkspace({
             <SectionHeader icon={Sparkles} title="分析质量全景" compact badge={projectsState === 'ready' && projects.length ? `已分析 ${analyzedProjects.length}/${projects.length}` : undefined} />
             <OverviewDataRegion state={projectsState} label="分析质量" placeholder={<OverviewQualitySkeleton />}>
             <div className="mt-4 flex items-center gap-4">
-              <ScoreGauge value={analyzedProjects.length ? averageAiScore : 0} empty={!analyzedProjects.length} />
+              <ScoreGauge value={averageAiScore ?? 0} empty={!isDefinedScore(averageAiScore)} />
               <div className="min-w-0 flex-1 space-y-2">
                 <div className="rounded-xl bg-yx-brand-soft/60 px-3 py-2.5">
                   <div className="flex items-baseline justify-between gap-2">
                     <span className="text-[9px] font-semibold tracking-wide text-yx-muted">平均完整度</span>
-                    <span className="text-lg font-bold leading-none tabular-nums text-yx-ink">{analyzedProjects.length ? `${averageCompleteness}%` : '--'}</span>
+                    <span className="text-lg font-bold leading-none tabular-nums text-yx-ink">{isDefinedScore(averageCompleteness) ? `${averageCompleteness}%` : '--'}</span>
                   </div>
                   <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/90">
-                    <div className="yx-overview-completeness-fill h-full rounded-full bg-gradient-to-r from-yx-brand-bright to-yx-brand-hover" style={{ width: `${analyzedProjects.length ? Math.min(Math.max(averageCompleteness, 0), 100) : 0}%` }} />
+                    <div className="yx-overview-completeness-fill h-full rounded-full bg-gradient-to-r from-yx-brand-bright to-yx-brand-hover" style={{ width: `${isDefinedScore(averageCompleteness) ? Math.min(Math.max(averageCompleteness, 0), 100) : 0}%` }} />
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-2">
@@ -762,7 +634,7 @@ export function OverviewWorkspace({
                       <span className="block truncate text-[11px] font-semibold text-yx-ink transition-colors group-hover:text-yx-brand-hover" title={bestProject.title}>{bestProject.title}</span>
                       <span className="mt-0.5 block text-[8.5px] text-yx-faint">质量标杆 · 评分最高</span>
                     </span>
-                    <span className="shrink-0 rounded-full bg-yx-brand-soft px-2 py-0.5 text-[11px] font-bold tabular-nums text-yx-brand-hover">{formatMetric(bestProject.latestReport?.aiScore)}</span>
+                    <span className="shrink-0 rounded-full bg-yx-brand-soft px-2 py-0.5 text-[11px] font-bold tabular-nums text-yx-brand-hover">{formatMetric(bestProject.latestSubmission?.aiScore)}</span>
                     <ArrowUpRight className="h-3 w-3 shrink-0 text-yx-faint transition-colors group-hover:text-yx-brand-hover" />
                   </button>
                 )}
@@ -773,7 +645,7 @@ export function OverviewWorkspace({
                       <span className="block truncate text-[11px] font-semibold text-yx-ink transition-colors group-hover:text-yx-warning-text" title={weakestProject.title}>{weakestProject.title}</span>
                       <span className="mt-0.5 block text-[8.5px] text-yx-faint">重点关注 · 评分待提升</span>
                     </span>
-                    <span className="shrink-0 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-bold tabular-nums text-yx-warning-text">{formatMetric(weakestProject.latestReport?.aiScore)}</span>
+                    <span className="shrink-0 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-bold tabular-nums text-yx-warning-text">{formatMetric(weakestProject.latestSubmission?.aiScore)}</span>
                     <ArrowUpRight className="h-3 w-3 shrink-0 text-yx-faint transition-colors group-hover:text-yx-warning-text" />
                   </button>
                 )}
@@ -794,13 +666,13 @@ export function OverviewWorkspace({
             <MetricSparkRow
               label={recentReports.length ? `近 ${recentReports.length} 版平均分` : '近期平均分'}
               value={formatMetric(recentReportAverage)}
-              helper={recentReportScores.length ? `${recentReportScores.length} 版已分析` : weeklyNewReports ? `近 7 天新增 ${weeklyNewReports} 版` : '上传报告后将显示评分走势'}
+              helper={recentReportScores.length ? `${recentReportScores.length} 版已分析` : weeklyNewReports ? `近 7 天新增 ${weeklyNewReports} 份` : '上传报告后将显示评分走势'}
               valueClassName={scoreTextClass(recentReportAverage)}
               chart={<PanelTrendChart points={recentReportScores} gradientId="yxRecentReportScoreTrend" label={`最近 ${recentReportScores.length} 版报告评分趋势`} />}
             />
-            {recentProjectActivities.length ? (
+            {projectActivities.length ? (
               <ul className="mt-3 space-y-0.5 border-t border-yx-hover pt-2">
-                {recentProjectActivities.map((activity) => {
+                {projectActivities.map((activity) => {
                   const Icon = projectActivityMeta[activity.kind].icon
                   return (
                     <li key={activity.id}>

@@ -224,26 +224,23 @@ test('prompt and model settings reject combinations that cannot fit the selected
   }
 })
 
-test('hot-reloaded client module rechecks the canonical migration ledger', async () => {
+test('hot-reloaded client module rechecks the native schema identity', async () => {
   const initial = await import('../lib/db/client')
   const first = initial.migrateDatabase()
   const reloaded = await import('../lib/db/client.ts?hot-reload=' + Date.now())
   const second = reloaded.migrateDatabase()
   const database = reloaded.getDatabase()
-  const ledger = database.prepare('SELECT version, name, checksum FROM schema_migrations ORDER BY version').all() as Array<{ version: number; name: string; checksum: string }>
-  assert.equal(first.version, first.migrations.at(-1)?.version)
-  assert.equal(second.version, first.version)
-  assert.deepEqual(ledger.map((row) => ({ ...row })), first.migrations.map((migration) => ({
-    version: migration.version,
-    name: migration.name,
-    checksum: migration.checksum,
-  })))
+  const identity = database.prepare('SELECT name, checksum FROM native_schema_identity WHERE id = 1').get() as { name: string; checksum: string }
+  assert.equal(first.schema, 'yanxing-native-p3')
+  assert.equal(second.schema, first.schema)
+  assert.equal(second.checksum, first.checksum)
+  assert.equal(identity.name, first.schema)
+  assert.equal(identity.checksum, first.checksum)
 
-  const checksum = first.migrations[0]?.checksum ?? ''
-  database.prepare('UPDATE schema_migrations SET checksum = ? WHERE version = 1').run('tampered')
-  assert.throws(() => reloaded.migrateDatabase(), /迁移账本校验失败.*破坏性 schema 重置/)
-  database.prepare('UPDATE schema_migrations SET checksum = ? WHERE version = 1').run(checksum)
-  assert.equal(reloaded.migrateDatabase().version, first.version)
+  database.prepare('UPDATE native_schema_identity SET checksum = ? WHERE id = 1').run('tampered')
+  assert.throws(() => reloaded.migrateDatabase(), /原生结构标记与本版本不一致/)
+  database.prepare('UPDATE native_schema_identity SET checksum = ? WHERE id = 1').run(first.checksum)
+  assert.equal(reloaded.migrateDatabase().checksum, first.checksum)
 })
 
 test('unreadable channel ciphertext keeps settings readable and fails model runtime with a clear error', () => {

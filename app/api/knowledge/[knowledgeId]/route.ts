@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getRequestSession } from '@/lib/auth/request'
-import { deleteKnowledgeItem, getKnowledgeItem, ReportAuthorizationChangedError, userCanDeleteKnowledgeItem } from '@/lib/db/repository'
+import { deleteKnowledgeItem, getKnowledgeItem, ReportAuthorizationChangedError, userCanDeleteKnowledgeItem } from '@/lib/db/knowledge-repository'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'

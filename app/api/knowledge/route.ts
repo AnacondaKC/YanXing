@@ -7,7 +7,7 @@ import { getRequestSession } from '@/lib/auth/request'
 import { checkRateLimit } from '@/lib/security/rate-limit'
 import { rateLimitFailure } from '@/lib/http/rate-limit-response'
 import { pageResult, parsePagination, paginationRangeFailure } from '@/lib/http/pagination'
-import { countKnowledgeItems, createKnowledgeItem, listKnowledgeItems, ReportAuthorizationChangedError } from '@/lib/db/repository'
+import { countKnowledgeItems, createKnowledgeItem, listKnowledgeItems, ReportAuthorizationChangedError } from '@/lib/db/knowledge-repository'
 import { releaseStorageReservation, reserveStorageQuota, StorageQuotaError } from '@/lib/storage/quota'
 import {
   fieldLimits,

@@ -4,15 +4,22 @@ import { BookOpen, FileText, FolderKanban, Layers3, Pin, Plus, Search } from 'lu
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { WorkspaceBrandHeader } from '@/components/workspace-brand'
 import { WorkspaceSidebar } from '@/components/workspace-shell'
-import type { ProjectWithCapabilities } from '@/modules/projects/domain'
+export type NavigationProject = {
+  id: string
+  title: string
+  ownerId: string
+  ownerName?: string
+  objective?: string
+  isExample?: boolean
+}
 
 const PROJECT_ROW_HEIGHT = 34
 const PROJECT_LIST_MAX_HEIGHT = 320
 const PROJECT_LIST_OVERSCAN = 4
 
-function prioritizeOwnedProjects(projects: ProjectWithCapabilities[], currentUserId?: string) {
-  const ownedProjects: ProjectWithCapabilities[] = []
-  const otherProjects: ProjectWithCapabilities[] = []
+function prioritizeOwnedProjects(projects: NavigationProject[], currentUserId?: string) {
+  const ownedProjects: NavigationProject[] = []
+  const otherProjects: NavigationProject[] = []
   for (const project of projects) {
     if (currentUserId && project.ownerId === currentUserId) ownedProjects.push(project)
     else otherProjects.push(project)
@@ -29,8 +36,8 @@ function ProjectNavigationList({
 }: {
   activeNav: 'overview' | 'reports' | 'knowledge' | 'project'
   activeProjectId?: string
-  onSelectProject: (project: ProjectWithCapabilities) => void
-  projects: ProjectWithCapabilities[]
+  onSelectProject: (project: NavigationProject) => void
+  projects: NavigationProject[]
   currentUserId?: string
 }) {
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -144,10 +151,10 @@ export function MainNavigationPanel({
 }: {
   activeNav: 'overview' | 'reports' | 'knowledge' | 'project'
   onNavigate: (nav: 'overview' | 'reports' | 'knowledge') => void
-  projects: ProjectWithCapabilities[]
+  projects: NavigationProject[]
   currentUserId?: string
   activeProjectId?: string
-  onSelectProject: (project: ProjectWithCapabilities) => void
+  onSelectProject: (project: NavigationProject) => void
   onOpenProjectGuide: () => void
   reportCount?: number
   knowledgeCount?: number
@@ -190,7 +197,6 @@ export function MainNavigationPanel({
         >
           <Search className="h-4 w-4 shrink-0 text-yx-muted" />
           <span className="min-w-0 flex-1 font-medium">搜索</span>
-          <kbd className="rounded border border-yx-line bg-yx-paper px-1 text-[10px] text-yx-muted">⌘K</kbd>
         </button>
 
         <div className="mt-4 flex min-h-0 flex-1 flex-col overflow-y-auto yx-subtle-scrollbar pr-0.5">

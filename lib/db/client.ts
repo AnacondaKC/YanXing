@@ -2,42 +2,49 @@ import { mkdirSync } from 'node:fs'
 import { DatabaseSync } from 'node:sqlite'
 import path from 'node:path'
 import { getDatabasePath } from '@/lib/db/database-path'
-import { databaseMigrations } from '@/lib/db/migrations'
-import { readSchemaVersion, runMigrations } from '@/lib/db/migrate'
+import {
+  assertNativeSchema,
+  ensureNativeDatabase,
+  nativeDatabaseInfo,
+  NATIVE_SCHEMA_CHECKSUM,
+  readNativeIdentity,
+  type NativeDatabaseInfo,
+} from '@/lib/db/native-schema'
+import { getReportStorageRoot } from '@/lib/storage/runtime-roots'
+import { assertNoIncompleteRestore } from '@/lib/storage/native-restore-guard'
+
+export {
+  NativeSchemaError,
+  NATIVE_SCHEMA_ERROR_CODES,
+  isNativeSchemaError,
+  publicNativeSchemaFailure,
+} from '@/lib/db/native-schema-error'
 
 type DatabaseGlobal = typeof globalThis & {
   __yanxingDatabase?: DatabaseSync
   __yanxingDatabasePath?: string
-  __yanxingSchemaVersion?: number
-  __yanxingSchemaChecksum?: string
-  __yanxingMigrationHeadStatement?: ReturnType<DatabaseSync['prepare']>
+  __yanxingNativeChecksum?: string
 }
 
 const databaseGlobal = globalThis as DatabaseGlobal
+const SQLITE_BUSY = 5
+const BUSY_TIMEOUT_MS = 5000
+const WAL_BUSY_ATTEMPTS = 20
 
 /**
- * 唯一的数据库连接入口：Web、Worker、认证和模型设置都从这里取得同一个全局连接。
- * 每次访问都会读取账本头；版本或 checksum 变化时重新执行完整迁移校验，避免热更新缓存绕过校验。
+ * Unique database connection for Web, Worker, auth, and settings.
+ * Empty files are initialized to the native schema. Legacy or mixed files are refused without writes.
  */
 export function getDatabase() {
-  const database = openDatabase()
-  ensureCachedDatabaseSchema(database)
-  return database
+  return openEnsuredDatabase()
 }
 
-/** 在 Web / Worker 启动前由管理脚本显式执行；每次调用都会校验账本和 schema。 */
-export function migrateDatabase() {
-  const database = openDatabase()
-  const version = validateDatabaseSchema(database)
-  return {
-    path: getDatabasePath(),
-    version,
-    migrations: databaseMigrations.map((migration) => ({
-      version: migration.version,
-      name: migration.name,
-      checksum: migration.checksum,
-    })),
-  }
+/** Explicit startup/CLI entry: initialize an empty database or validate the native schema. */
+export function migrateDatabase(): NativeDatabaseInfo {
+  const database = openEnsuredDatabase()
+  const storageRoot = getReportStorageRoot()
+  assertNativeSchema({ database, storageRoot })
+  return nativeDatabaseInfo(getDatabasePath())
 }
 
 export function inImmediateTransaction<T>(operation: (database: DatabaseSync) => T): T {
@@ -53,68 +60,49 @@ export function inImmediateTransaction<T>(operation: (database: DatabaseSync) =>
   }
 }
 
-function ensureCachedDatabaseSchema(database: DatabaseSync) {
-  const expectedMigration = getExpectedMigration()
-  const storedMigration = readStoredMigrationHead(database)
-  const cacheMatches = databaseGlobal.__yanxingSchemaVersion === expectedMigration.version
-    && databaseGlobal.__yanxingSchemaChecksum === expectedMigration.checksum
-  const ledgerMatches = storedMigration?.version === expectedMigration.version
-    && storedMigration.checksum === expectedMigration.checksum
-  if (cacheMatches && ledgerMatches) return storedMigration.version
-  return applyDatabaseMigrations(database, expectedMigration)
-}
-
-function validateDatabaseSchema(database: DatabaseSync) {
-  return applyDatabaseMigrations(database, getExpectedMigration())
-}
-
-function applyDatabaseMigrations(database: DatabaseSync, expectedMigration: typeof databaseMigrations[number]) {
-  runMigrations(database)
-  const version = readSchemaVersion(database)
-  databaseGlobal.__yanxingSchemaVersion = version
-  databaseGlobal.__yanxingSchemaChecksum = expectedMigration.checksum
-  return version
-}
-
-function getExpectedMigration() {
-  const expectedMigration = databaseMigrations.at(-1)
-  if (!expectedMigration) throw new Error('数据库迁移清单为空。')
-  return expectedMigration
-}
-
-function readStoredMigrationHead(database: DatabaseSync) {
-  try {
-    const statement = databaseGlobal.__yanxingMigrationHeadStatement
-      ?? database.prepare('SELECT version, checksum FROM schema_migrations ORDER BY version DESC LIMIT 1')
-    databaseGlobal.__yanxingMigrationHeadStatement = statement
-    const row = statement.get() as { version?: unknown; checksum?: unknown } | undefined
-    if (!row) return { version: 0, checksum: '' }
-    return { version: Number(row.version) || 0, checksum: typeof row.checksum === 'string' ? row.checksum : '' }
-  } catch {
-    databaseGlobal.__yanxingMigrationHeadStatement = undefined
-    return undefined
-  }
-}
-
-function openDatabase() {
+function openEnsuredDatabase() {
   const databasePath = getDatabasePath()
+  assertNoIncompleteRestore(databasePath)
   const cachedDatabase = databaseGlobal.__yanxingDatabase
   if (cachedDatabase) {
     if (databaseGlobal.__yanxingDatabasePath !== databasePath) {
       throw new Error('进程运行期间不能切换 YANXING_DATABASE_PATH；请重启进程。')
     }
+    ensureCachedNativeSchema(cachedDatabase)
     return cachedDatabase
   }
 
   mkdirSync(path.dirname(databasePath), { recursive: true })
-  const database = new DatabaseSync(databasePath, { timeout: 5000 })
-  database.exec('PRAGMA busy_timeout = 5000;')
-  executeWithBusyRetry(() => database.exec('PRAGMA journal_mode = WAL;'))
-  database.exec('PRAGMA foreign_keys = ON;')
-  databaseGlobal.__yanxingDatabase = database
-  databaseGlobal.__yanxingDatabasePath = databasePath
-  databaseGlobal.__yanxingMigrationHeadStatement = undefined
-  return database
+  const database = new DatabaseSync(databasePath, { timeout: BUSY_TIMEOUT_MS })
+  try {
+    database.exec('PRAGMA busy_timeout = ' + BUSY_TIMEOUT_MS + ';')
+    database.exec('PRAGMA foreign_keys = ON;')
+    const storageRoot = getReportStorageRoot()
+    ensureNativeDatabase({ database, storageRoot })
+    enableWal(database)
+    databaseGlobal.__yanxingDatabase = database
+    databaseGlobal.__yanxingDatabasePath = databasePath
+    databaseGlobal.__yanxingNativeChecksum = NATIVE_SCHEMA_CHECKSUM
+    return database
+  } catch (error) {
+    try { database.close() } catch { /* refused connections must not stay cached */ }
+    throw error
+  }
+}
+
+function ensureCachedNativeSchema(database: DatabaseSync) {
+  const identity = readNativeIdentity(database)
+  if (databaseGlobal.__yanxingNativeChecksum === NATIVE_SCHEMA_CHECKSUM && identity?.checksum === NATIVE_SCHEMA_CHECKSUM) {
+    return
+  }
+  assertNativeSchema({ database, storageRoot: getReportStorageRoot() })
+  databaseGlobal.__yanxingNativeChecksum = NATIVE_SCHEMA_CHECKSUM
+}
+
+function enableWal(database: DatabaseSync) {
+  executeWithBusyRetry(() => {
+    database.exec('PRAGMA journal_mode = WAL;')
+  })
 }
 
 const busyRetrySignal = new Int32Array(new SharedArrayBuffer(4))
@@ -126,7 +114,7 @@ function executeWithBusyRetry(operation: () => void) {
       return
     } catch (error) {
       const code = typeof error === 'object' && error !== null && 'errcode' in error ? Number(error.errcode) : undefined
-      if (code !== 5 || attempt >= 20) throw error
+      if (code !== SQLITE_BUSY || attempt >= WAL_BUSY_ATTEMPTS) throw error
       Atomics.wait(busyRetrySignal, 0, 0, 50 * (attempt + 1))
     }
   }

@@ -3,15 +3,18 @@ import { lstat, readdir } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
 import { getDatabase } from '@/lib/db/client'
+import { NativeSchemaError } from '@/lib/db/native-schema-error'
+import { classifyDatabaseSchema, readBoundStorageRoot, tableExists } from '@/lib/db/native-schema'
 import { getKnowledgeStorageRoot } from '@/lib/knowledge-storage'
-import { reportStorageRoot } from '@/lib/documents/report-storage'
 import { isPathWithinRoot } from '@/lib/storage/path-containment'
-import { expireStorageReservationsInDatabase } from '@/lib/storage/quota'
+import { getReportStorageRoot, getTemporaryStorageRoot } from '@/lib/storage/runtime-roots'
+import { expireStorageReservationsInDatabase, releaseStorageReservationInDatabase } from '@/lib/storage/quota'
 import type { StorageOwnerType } from '@/lib/storage/quota'
-import { runtimeConfig } from '@/lib/config/environment'
+import { reconcileSubmissionQuota } from '@/lib/storage/submission-reconciliation'
 
 export const DEFAULT_STORAGE_ORPHAN_GRACE_MS = 60 * 60 * 1000
 const MIN_STORAGE_ORPHAN_GRACE_MS = 15 * 60 * 1000
+const PROTECTED_UPLOAD_STATUSES_SQL = "('receiving', 'parsing', 'ready', 'reclaiming')"
 
 type StorageRootKind = StorageOwnerType | 'temporary'
 
@@ -52,6 +55,7 @@ type StorageMaintenancePlan = {
   allocationsRemoved: number
   usageRowsUpdated: number
   candidates: ManagedFile[]
+  knowledgeOwnershipUnknown: boolean
   protectedPaths: Set<string>
   activeReservationKinds: Set<StorageRootKind>
 }
@@ -135,6 +139,7 @@ export async function runStorageMaintenance(options: StorageMaintenanceOptions =
   })
 
   const database = options.database ?? getDatabase()
+  if (classifyDatabaseSchema(database) === 'legacy') throw new NativeSchemaError('LEGACY_DATABASE')
   const missingRoots = resolveMissingStorageRoots(database, scan.missingRoots, timestamp)
   // 目录扫描必须完整，否则本轮不能重建账本或删除文件；部分扫描会把不可见的活跃文件误判为孤儿。
   if (!scan.complete || !refreshed.complete || missingRoots.incomplete) {
@@ -147,16 +152,39 @@ export async function runStorageMaintenance(options: StorageMaintenanceOptions =
     ])
   }
 
+  const boundRoot = readBoundStorageRoot(database)
+  if (boundRoot && boundRoot !== roots.reportRoot) throw new NativeSchemaError('STORAGE_ROOT_MISMATCH')
   const plan = withImmediateTransaction(database, dryRun, () => {
     return reconcileInDatabase(database, refreshed.files, roots, timestamp)
   })
+
+  // 空知识账本无法证明目录归属；仍允许临时文件清理及其它对账工作。
+  if (plan.knowledgeOwnershipUnknown && !plan.activeReservationKinds.has('knowledge')) {
+    const cutoffMs = timestampMs - orphanGraceMs
+    const ambiguousFiles = plan.candidates.filter((file) => file.kind === 'knowledge' && file.mtimeMs < cutoffMs)
+    const ambiguousSidecars = sidecars.filter((file) => file.kind === 'knowledge' && file.mtimeMs < cutoffMs
+      && !plan.protectedPaths.has(file.sourcePath) && !safeLstat(file.sourcePath)?.isFile())
+    if (ambiguousFiles.length || ambiguousSidecars.length) {
+      scanErrors.push({ path: roots.knowledgeRoot, message: '知识记录与知识分配均为空，无法确认知识目录归属；已跳过知识孤儿文件删除。' })
+      for (const file of ambiguousFiles) plan.protectedPaths.add(file.path)
+      for (const file of ambiguousSidecars) plan.protectedPaths.add(file.sourcePath)
+    }
+  }
 
   const deletion = dryRun
     ? emptyDeletionResult()
     : deleteOrphanFiles(database, plan.candidates, plan.protectedPaths, plan.activeReservationKinds, roots, timestampMs, orphanGraceMs)
   const sidecarDeletion = dryRun
     ? emptyDeletionResult()
-    : deleteOrphanSidecars(database, sidecars, plan.protectedPaths, plan.activeReservationKinds, roots, timestampMs, orphanGraceMs)
+    : deleteOrphanSidecars(
+        database,
+        sidecars.filter((sidecar) => sidecar.kind !== 'report'),
+        plan.protectedPaths,
+        plan.activeReservationKinds,
+        roots,
+        timestampMs,
+        orphanGraceMs,
+      )
 
   return {
     dryRun,
@@ -175,28 +203,13 @@ export async function runStorageMaintenance(options: StorageMaintenanceOptions =
   }
 }
 
-const storageMaintenanceIntervalMs = runtimeConfig.storage.maintenanceIntervalMs
-let nextStorageMaintenanceAt = 0
-let storageMaintenancePromise: Promise<StorageMaintenanceResult> | undefined
-
-/**
- * Worker 轮询入口：同一进程内合并并发调用，并按间隔执行完整维护。
- * 维护失败不会终止 Worker，下次间隔到期后自动重试。
- */
-export function runStorageMaintenanceIfDue(nowMs = Date.now()): Promise<StorageMaintenanceResult> | undefined {
-  if (storageMaintenancePromise) return storageMaintenancePromise
-  if (!Number.isFinite(nowMs) || nowMs < nextStorageMaintenanceAt) return undefined
-  nextStorageMaintenanceAt = nowMs + storageMaintenanceIntervalMs
-  storageMaintenancePromise = runStorageMaintenance().finally(() => {
-    storageMaintenancePromise = undefined
-  })
-  return storageMaintenancePromise
-}
 
 function reconcileInDatabase(database: DatabaseSync, files: ManagedFile[], roots: StorageMaintenanceRoots, timestamp: string): StorageMaintenancePlan {
-  const expiredReservations = expireStorageReservationsInDatabase(database, timestamp)
+  const knowledgeOwnershipUnknown = !database.prepare('SELECT 1 FROM knowledge_items LIMIT 1').get()
+    && !database.prepare("SELECT 1 FROM storage_allocations WHERE owner_type = 'knowledge' LIMIT 1").get()
+  const expiredReservations = expireNonUploadReservations(database, timestamp)
   const fileByPath = new Map(files.map((file) => [file.path, file]))
-  const businesses = readBusinessFiles(database)
+  const businesses = readKnowledgeFiles(database).filter((file) => Boolean(file.ownerId && file.sourcePath))
   const allocations = readAllocations(database)
   const allocationsByKey = new Map(allocations.map((allocation) => [allocationKey(allocation.ownerType, allocation.ownerId), allocation]))
   const retainedKeys = new Set<string>()
@@ -224,17 +237,24 @@ function reconcileInDatabase(database: DatabaseSync, files: ManagedFile[], roots
 
   let allocationsRemoved = 0
   for (const allocation of allocations) {
+    if (allocation.ownerType === 'report') continue
     const key = allocationKey(allocation.ownerType, allocation.ownerId)
     if (retainedKeys.has(key)) continue
     database.prepare('DELETE FROM storage_allocations WHERE owner_type = ? AND owner_id = ?').run(allocation.ownerType, allocation.ownerId)
     allocationsRemoved += 1
   }
 
+  if (tableExists(database, 'report_submissions')) {
+    reconcileSubmissionQuota({
+      database,
+      storageRoot: readBoundStorageRoot(database) ?? roots.reportRoot,
+      at: timestamp,
+    })
+  }
   const usageRowsUpdated = rebuildStorageUsage(database, timestamp)
-  // 保护路径和 reservation 类型均批量快照，孤儿删除阶段不再对每个候选文件重复扫描业务表。
   const protectedPaths = readProtectedPaths(database)
   const activeReservationKinds = readActiveReservationKinds(database, timestamp)
-  const candidates = files.filter((file) => !protectedPaths.has(file.path))
+  const candidates = files.filter((file) => file.kind !== 'report' && !protectedPaths.has(file.path))
 
   return {
     expiredReservations,
@@ -243,6 +263,7 @@ function reconcileInDatabase(database: DatabaseSync, files: ManagedFile[], roots
     allocationsRemoved,
     usageRowsUpdated,
     candidates,
+    knowledgeOwnershipUnknown,
     protectedPaths,
     activeReservationKinds,
   }
@@ -324,34 +345,56 @@ function managedFileAtPath(
   }
 }
 
-function readBusinessFiles(database: DatabaseSync): StorageBusinessFile[] {
-  const reports = database.prepare("SELECT report.id AS owner_id, COALESCE((SELECT user_id FROM project_members WHERE project_id = report.project_id AND role = 'owner' LIMIT 1), '') AS user_id, report.project_id, report.source_size AS size_bytes, report.file_hash, report.source_path, report.mime_type, report.created_at FROM report_versions report").all() as Array<Record<string, unknown>>
-  const knowledge = database.prepare("SELECT id AS owner_id, uploaded_by_user_id AS user_id, NULL AS project_id, file_size AS size_bytes, file_hash, source_path, file_name, created_at FROM knowledge_items").all() as Array<Record<string, unknown>>
+function expireNonUploadReservations(database: DatabaseSync, timestamp: string) {
+  if (!tableExists(database, 'report_uploads')) return expireStorageReservationsInDatabase(database, timestamp)
+  const rows = database.prepare(`
+    SELECT id FROM storage_reservations
+    WHERE state = 'active' AND expires_at <= ?
+      AND id NOT IN (SELECT reservation_id FROM report_uploads WHERE reservation_id IS NOT NULL)
+  `).all(timestamp) as Array<{ id: string }>
+  let count = 0
+  for (const row of rows) {
+    if (releaseStorageReservationInDatabase(database, row.id, 'expired', timestamp)) count += 1
+  }
+  return count
+}
 
-  return [
-    ...reports.map((row) => ({
-      ownerType: 'report' as const,
-      ownerId: text(row.owner_id),
-      userId: text(row.user_id),
-      projectId: nullableText(row.project_id),
-      sizeBytes: safeInteger(row.size_bytes),
-      fileHash: text(row.file_hash),
-      sourcePath: text(row.source_path),
-      mimeType: text(row.mime_type),
-      createdAt: text(row.created_at),
-    })),
-    ...knowledge.map((row) => ({
-      ownerType: 'knowledge' as const,
-      ownerId: text(row.owner_id),
-      userId: text(row.user_id),
-      projectId: null,
-      sizeBytes: safeInteger(row.size_bytes),
-      fileHash: text(row.file_hash),
-      sourcePath: text(row.source_path),
-      mimeType: mimeTypeForFileName(text(row.file_name)),
-      createdAt: text(row.created_at),
-    })),
-  ].filter((file) => Boolean(file.ownerId && file.sourcePath))
+function readNativeReportFiles(database: DatabaseSync): StorageBusinessFile[] {
+  if (!tableExists(database, 'report_submissions')) return []
+  const root = readBoundStorageRoot(database)
+  if (!root) return []
+  const rows = database.prepare(`
+    SELECT r.id AS owner_id, r.submitted_by AS user_id, r.project_id, r.source_size AS size_bytes,
+      r.file_hash, r.source_key, r.submitted_at AS created_at, COALESCE(d.mime_type, '') AS mime_type
+    FROM report_submissions r
+    LEFT JOIN report_submission_documents d ON d.report_id = r.id
+  `).all() as Array<Record<string, unknown>>
+  return rows.map((row) => ({
+    ownerType: 'report' as const,
+    ownerId: text(row.owner_id),
+    userId: text(row.user_id),
+    projectId: nullableText(row.project_id),
+    sizeBytes: safeInteger(row.size_bytes),
+    fileHash: text(row.file_hash),
+    sourcePath: resolve(root, text(row.source_key)),
+    mimeType: text(row.mime_type),
+    createdAt: text(row.created_at),
+  }))
+}
+
+function readKnowledgeFiles(database: DatabaseSync): StorageBusinessFile[] {
+  const knowledge = database.prepare("SELECT id AS owner_id, uploaded_by_user_id AS user_id, NULL AS project_id, file_size AS size_bytes, file_hash, source_path, file_name, created_at FROM knowledge_items").all() as Array<Record<string, unknown>>
+  return knowledge.map((row) => ({
+    ownerType: 'knowledge' as const,
+    ownerId: text(row.owner_id),
+    userId: text(row.user_id),
+    projectId: null,
+    sizeBytes: safeInteger(row.size_bytes),
+    fileHash: text(row.file_hash),
+    sourcePath: text(row.source_path),
+    mimeType: mimeTypeForFileName(text(row.file_name)),
+    createdAt: text(row.created_at),
+  }))
 }
 
 function readAllocations(database: DatabaseSync): StorageAllocation[] {
@@ -486,7 +529,7 @@ function deleteOrphanFiles(
   // 先完成文件系统侧的批量筛选，避免在数据库保护查询期间持有写锁。
   for (const candidate of candidates) {
     try {
-      if (!isSafeManagedFilePath(candidate.path, candidate.kind, roots)) {
+      if (candidate.kind === 'report' || !isSafeManagedFilePath(candidate.path, candidate.kind, roots)) {
         result.skippedProtected += 1
         continue
       }
@@ -516,7 +559,7 @@ function deleteOrphanFiles(
   // 快照后到 unlink 之间仍可能有跨进程提交；上传使用不可复用随机路径，且最小宽限期覆盖上传总时限，作为该无锁窗口的边界。
   for (const candidate of eligibleCandidates) {
     try {
-      if (freshProtectedPaths.has(candidate.path)) {
+      if (candidate.kind === 'report' || freshProtectedPaths.has(candidate.path)) {
         result.skippedProtected += 1
         continue
       }
@@ -614,10 +657,25 @@ function deleteOrphanSidecars(
 
 function readProtectedPaths(database: DatabaseSync) {
   const paths = new Set<string>()
-  const rows = database.prepare('SELECT source_path FROM report_versions UNION ALL SELECT source_path FROM knowledge_items UNION ALL SELECT source_path FROM storage_allocations').all() as Array<{ source_path?: unknown }>
+  const rows = database.prepare('SELECT source_path FROM knowledge_items UNION ALL SELECT source_path FROM storage_allocations').all() as Array<{ source_path?: unknown }>
   for (const row of rows) {
     const path = normalizedPath(row.source_path)
     if (path) paths.add(path)
+  }
+  for (const report of readNativeReportFiles(database)) {
+    const path = normalizedPath(report.sourcePath)
+    if (path) paths.add(path)
+  }
+  const uploadRoot = readBoundStorageRoot(database)
+  if (uploadRoot && tableExists(database, 'report_uploads')) {
+    const uploads = database.prepare(`
+      SELECT source_key FROM report_uploads
+      WHERE status IN ${PROTECTED_UPLOAD_STATUSES_SQL} AND source_key IS NOT NULL
+    `).all() as Array<{ source_key?: unknown }>
+    for (const upload of uploads) {
+      const path = normalizedPath(resolve(uploadRoot, text(upload.source_key)))
+      if (path) paths.add(path)
+    }
   }
   return paths
 }
@@ -756,7 +814,7 @@ function resolveMissingStorageRoots(
 function storageRootHasRecords(database: DatabaseSync, kind: StorageRootKind, timestamp: string) {
   if (kind === 'temporary') return false
   const businessCount = kind === 'report'
-    ? (database.prepare('SELECT COUNT(*) AS count FROM report_versions').get() as { count: number }).count
+    ? countNativeReports(database)
     : (database.prepare('SELECT COUNT(*) AS count FROM knowledge_items').get() as { count: number }).count
   const allocationCount = (database.prepare('SELECT COUNT(*) AS count FROM storage_allocations WHERE owner_type = ?').get(kind) as { count: number }).count
   const reservationCount = (database.prepare(
@@ -800,11 +858,16 @@ function refreshManagedFiles(files: ManagedFile[]): ManagedFileScan {
   return refreshed
 }
 
+function countNativeReports(database: DatabaseSync) {
+  if (!tableExists(database, 'report_submissions')) return 0
+  return (database.prepare('SELECT COUNT(*) AS count FROM report_submissions').get() as { count: number }).count
+}
+
 function resolveStorageMaintenanceRoots(input: Partial<StorageMaintenanceRoots> | undefined): StorageMaintenanceRoots {
   const roots: StorageMaintenanceRoots = {
-    reportRoot: resolve(input?.reportRoot ?? reportStorageRoot),
+    reportRoot: resolve(input?.reportRoot ?? getReportStorageRoot()),
     knowledgeRoot: resolve(input?.knowledgeRoot ?? getKnowledgeStorageRoot()),
-    temporaryRoot: resolve(input?.temporaryRoot ?? join(dirname(reportStorageRoot), 'tmp')),
+    temporaryRoot: resolve(input?.temporaryRoot ?? getTemporaryStorageRoot()),
   }
   const values = Object.values(roots)
   if (new Set(values).size !== values.length || values.some((root, index) => values.some((other, otherIndex) => index !== otherIndex && isPathWithinRoot(root, other)))) {

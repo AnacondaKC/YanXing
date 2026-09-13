@@ -1,71 +1,47 @@
 'use client'
 
 import { ArrowUpRight, BookOpen, ChevronDown, ChevronRight, Download, FileText, FolderKanban, Gauge, List, Search, Sparkles, Type, UserRound, Users } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { CardAura, GroupCardDecoration } from '@/components/ui/card-decoration'
 import { RepositoryLoading, type RepositoryDataState } from '@/components/repository-loading'
 import { useRepositoryEntrance } from '@/components/use-repository-entrance'
 import { EmptyState } from '@/components/ui/empty-state'
 import { CellCaption, RepositoryStatCell } from '@/components/ui/repository-stats'
 import { CustomSelect } from '@/components/ui/select'
-import { fetchAllPages } from '@/lib/client-request'
 import { formatReportCharacters, formatReportDate, scoreTextClass } from '@/lib/format'
 import { cumulativeTrend, runningAverageValues } from '@/lib/overview-trends'
-import { getReportStageLabel } from '@/lib/report-stage'
-import type { ProjectWithCapabilities } from '@/modules/projects/domain'
-import type { ReportVersion } from '@/modules/reports/domain'
-import type { ReportWithProject } from '@/components/workspace-types'
+import { averageDefinedTenth, groupReportsByProject, projectLatestLabel, reportMatchesLibraryQuery, reportStageLabel } from '@/lib/overview-presentation'
+import type { WorkspaceProjectListItem, WorkspaceReportCard } from '@/lib/workspace-submission'
+
+export type ReportsRepositoryOpenMode = 'content' | 'dashboard'
+
+export type ReportsRepositoryWorkspaceProps = {
+  projects: WorkspaceProjectListItem[]
+  reports: WorkspaceReportCard[]
+  loading: boolean
+  hasLoaded: boolean
+  loadError?: string
+  onRetry: () => void
+  onOpenReport: (report: WorkspaceReportCard, project: WorkspaceProjectListItem, mode: ReportsRepositoryOpenMode) => void
+  onSelectProject: (project: WorkspaceProjectListItem) => void
+}
 
 export function ReportsRepositoryWorkspace({
   projects,
+  reports,
+  loading,
+  hasLoaded,
+  loadError,
+  onRetry,
   onOpenReport,
   onSelectProject,
-}: {
-  projects: ProjectWithCapabilities[]
-  onOpenReport: (report: ReportVersion, project: ProjectWithCapabilities, mode: 'content' | 'dashboard') => void
-  onSelectProject: (project: ProjectWithCapabilities) => void
-}) {
-  const [reports, setReports] = useState<ReportWithProject[]>([])
-  const [loading, setLoading] = useState(true)
-  const [hasLoaded, setHasLoaded] = useState(false)
+}: ReportsRepositoryWorkspaceProps) {
   const { entering, finishEntrance } = useRepositoryEntrance(loading)
-  const [loadError, setLoadError] = useState('')
   const initialLoading = loading && !hasLoaded
   const dataState: RepositoryDataState = hasLoaded ? 'ready' : loading ? 'loading' : 'error'
   const [search, setSearch] = useState('')
   const [projectFilter, setProjectFilter] = useState('all')
   const [expandedProjectIds, setExpandedProjectIds] = useState<string[]>([])
-  const loadSequenceRef = useRef(0)
-  const loadControllerRef = useRef<AbortController | undefined>(undefined)
-
-  const fetchReports = useCallback(async () => {
-    const requestSequence = ++loadSequenceRef.current
-    loadControllerRef.current?.abort()
-    const controller = new AbortController()
-    loadControllerRef.current = controller
-    setLoading(true)
-    try {
-      const result = await fetchAllPages<ReportWithProject>('/api/reports', 'reports', { cache: 'no-store', signal: controller.signal })
-      if (controller.signal.aborted || requestSequence !== loadSequenceRef.current) return
-      setReports(result.items)
-      setHasLoaded(true)
-      setLoadError('')
-    } catch {
-      if (controller.signal.aborted || requestSequence !== loadSequenceRef.current) return
-      setLoadError('报告列表读取失败，请重试；已加载的内容会继续保留。')
-    } finally {
-      if (loadControllerRef.current === controller) loadControllerRef.current = undefined
-      if (!controller.signal.aborted && requestSequence === loadSequenceRef.current) setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    void fetchReports()
-    return () => {
-      loadSequenceRef.current += 1
-      loadControllerRef.current?.abort()
-    }
-  }, [fetchReports])
 
   const projectOptions = useMemo(() => [
     {
@@ -79,71 +55,38 @@ export function ReportsRepositoryWorkspace({
       label: p.title,
       textLabel: p.title,
       icon: FolderKanban,
-      badge: p.latestReport ? `V${p.latestReport.version}` : undefined,
+      badge: projectLatestLabel(p),
       badgeTone: 'gray' as const,
     })),
   ], [projects])
 
-  const filteredReports = useMemo(() => reports.filter((report) => {
-    const matchesSearch =
-      report.title.toLowerCase().includes(search.toLowerCase()) ||
-      report.fileName.toLowerCase().includes(search.toLowerCase()) ||
-      report.projectTitle.toLowerCase().includes(search.toLowerCase())
-    if (!matchesSearch) return false
-    if (projectFilter !== 'all' && report.projectId !== projectFilter) return false
-    return true
-  }), [reports, search, projectFilter])
+  const titleById = useMemo(() => new Map(projects.map((project) => [project.id, project.title])), [projects])
+  const filteredReports = useMemo(() => reports.filter((report) => reportMatchesLibraryQuery({
+    report,
+    search,
+    projectFilter,
+    projectTitle: report.projectTitle ?? titleById.get(report.projectId) ?? '',
+  })), [reports, search, projectFilter, titleById])
 
-  const groupedReports = useMemo(() => {
-    const groups = new Map<string, { projectId: string; projectTitle: string; reports: ReportWithProject[] }>()
-    for (const report of filteredReports) {
-      const existing = groups.get(report.projectId)
-      if (existing) existing.reports.push(report)
-      else groups.set(report.projectId, {
-        projectId: report.projectId,
-        projectTitle: report.projectTitle,
-        reports: [report],
-      })
-    }
-    for (const group of groups.values()) {
-      group.reports.sort((left, right) => right.version - left.version || right.createdAt.localeCompare(left.createdAt))
-    }
-    const ordered: Array<{ projectId: string; projectTitle: string; reports: ReportWithProject[] }> = []
-    for (const project of projects) {
-      const group = groups.get(project.id)
-      if (!group) continue
-      ordered.push(group)
-      groups.delete(project.id)
-    }
-    ordered.push(...groups.values())
-    return ordered
-  }, [filteredReports, projects])
+  const groupedReports = useMemo(() => groupReportsByProject({ reports: filteredReports, projects }), [filteredReports, projects])
 
-  const filteredAiScores = filteredReports.flatMap((report) => report.aiScore === undefined ? [] : [report.aiScore])
-  const filteredCompletenessScores = filteredReports.flatMap((report) => report.completeness === undefined ? [] : [report.completeness])
-  const overallAverageAiScore = filteredAiScores.length > 0
-    ? Math.round((filteredAiScores.reduce((sum, score) => sum + score, 0) / filteredAiScores.length) * 10) / 10
-    : undefined
-  const overallAverageCompleteness = filteredCompletenessScores.length > 0
-    ? Math.round((filteredCompletenessScores.reduce((sum, score) => sum + score, 0) / filteredCompletenessScores.length) * 10) / 10
-    : undefined
+  const overallAverageAiScore = averageDefinedTenth(filteredReports.map((report) => report.aiScore))
+  const overallAverageCompleteness = averageDefinedTenth(filteredReports.map((report) => report.completeness))
   const totalCharacterCount = filteredReports.reduce((sum, report) => sum + report.characterCount, 0)
   const totalParagraphCount = filteredReports.reduce((sum, report) => sum + report.paragraphCount, 0)
-  const hasSectionCount = filteredReports.some((report) => report.sectionCount !== undefined)
-  const totalSectionCount = filteredReports.reduce((sum, report) => sum + (report.sectionCount ?? 0), 0)
   const firstProjectAt = new Map<string, string>()
   for (const report of filteredReports) {
     const existing = firstProjectAt.get(report.projectId)
-    if (!existing || report.createdAt < existing) firstProjectAt.set(report.projectId, report.createdAt)
+    if (!existing || report.submittedAt < existing) firstProjectAt.set(report.projectId, report.submittedAt)
   }
   const repositoryStats = [
-    { label: '收录报告', value: filteredReports.length.toLocaleString('zh-CN'), unit: '份', icon: FileText, points: cumulativeTrend(filteredReports.map((report) => ({ at: report.createdAt, value: 1 }))), trendLabel: '近 7 日收录报告累计走势' },
+    { label: '收录报告', value: filteredReports.length.toLocaleString('zh-CN'), unit: '份', icon: FileText, points: cumulativeTrend(filteredReports.map((report) => ({ at: report.submittedAt, value: 1 }))), trendLabel: '近 7 日收录报告累计走势' },
     { label: '覆盖课题', value: groupedReports.length.toLocaleString('zh-CN'), unit: '个', icon: FolderKanban, points: cumulativeTrend([...firstProjectAt.values()].map((at) => ({ at, value: 1 }))), trendLabel: '近 7 日覆盖课题累计走势' },
-    { label: '平均 AI 综合评分', value: overallAverageAiScore?.toString() ?? '--', unit: '分', icon: Sparkles, valueClassName: scoreTextClass(overallAverageAiScore), points: runningAverageTrend(filteredReports.flatMap((report) => report.aiScore === undefined ? [] : [{ at: report.createdAt, value: report.aiScore }])), trendLabel: '近 7 日平均 AI 综合评分走势' },
-    { label: '平均完整度', value: overallAverageCompleteness?.toString() ?? '--', unit: '%', icon: Gauge, valueClassName: scoreTextClass(overallAverageCompleteness), points: runningAverageTrend(filteredReports.flatMap((report) => report.completeness === undefined ? [] : [{ at: report.createdAt, value: report.completeness }])), trendLabel: '近 7 日平均完整度走势' },
-    { label: '总字数', value: formatReportCharacters(totalCharacterCount), unit: '字', icon: Type, points: cumulativeTrend(filteredReports.map((report) => ({ at: report.createdAt, value: report.characterCount }))), trendLabel: '近 7 日总字数累计走势' },
-    { label: '总段落数', value: totalParagraphCount.toLocaleString('zh-CN'), unit: '段', icon: List, points: cumulativeTrend(filteredReports.map((report) => ({ at: report.createdAt, value: report.paragraphCount }))), trendLabel: '近 7 日总段落数累计走势' },
-    { label: '总章节数', value: hasSectionCount ? totalSectionCount.toLocaleString('zh-CN') : '--', unit: '章', icon: BookOpen, points: cumulativeTrend(filteredReports.flatMap((report) => report.sectionCount === undefined ? [] : [{ at: report.createdAt, value: report.sectionCount }])), trendLabel: '近 7 日总章节数累计走势' },
+    { label: '平均 AI 综合评分', value: overallAverageAiScore?.toString() ?? '--', unit: '分', icon: Sparkles, valueClassName: scoreTextClass(overallAverageAiScore), points: runningAverageTrend(filteredReports.flatMap((report) => report.aiScore === undefined ? [] : [{ at: report.submittedAt, value: report.aiScore }])), trendLabel: '近 7 日平均 AI 综合评分走势' },
+    { label: '平均完整度', value: overallAverageCompleteness?.toString() ?? '--', unit: '%', icon: Gauge, valueClassName: scoreTextClass(overallAverageCompleteness), points: runningAverageTrend(filteredReports.flatMap((report) => report.completeness === undefined ? [] : [{ at: report.submittedAt, value: report.completeness }])), trendLabel: '近 7 日平均完整度走势' },
+    { label: '总字数', value: formatReportCharacters(totalCharacterCount), unit: '字', icon: Type, points: cumulativeTrend(filteredReports.map((report) => ({ at: report.submittedAt, value: report.characterCount }))), trendLabel: '近 7 日总字数累计走势' },
+    { label: '总段落数', value: totalParagraphCount.toLocaleString('zh-CN'), unit: '段', icon: List, points: cumulativeTrend(filteredReports.map((report) => ({ at: report.submittedAt, value: report.paragraphCount }))), trendLabel: '近 7 日总段落数累计走势' },
+    { label: '总章节数', value: '--', unit: '章', icon: BookOpen, points: [], trendLabel: '当前报告摘要接口尚未提供章节统计，暂不展示数值' },
   ]
 
   function toggleProjectExpanded(projectId: string) {
@@ -157,13 +100,13 @@ export function ReportsRepositoryWorkspace({
       {loadError && (
         <div role="alert" className="flex items-center justify-between gap-3 rounded-lg border border-yx-warning/25 bg-yx-warning-soft px-4 py-3 text-xs text-yx-warning-text">
           <span>{loadError}</span>
-          <button type="button" onClick={() => void fetchReports()} className="shrink-0 font-semibold underline decoration-yx-warning/40 underline-offset-2">重试</button>
+          <button type="button" onClick={onRetry} className="shrink-0 font-semibold underline decoration-yx-warning/40 underline-offset-2">重试</button>
         </div>
       )}
       {/* 工具面板：标题 + 搜索筛选 + 统计磁贴，装饰语言对齐总览面板 */}
       <section className="relative overflow-hidden rounded-lg border border-yx-line bg-yx-paper p-5 shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-[border-color,box-shadow] duration-200 hover:border-yx-brand/25 hover:shadow-[0_12px_28px_-14px_color-mix(in_srgb,var(--yx-brand-strong)_25%,transparent)]">
         <div aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden">
-          <CardAura showTopHighlight={false} />
+          <CardAura />
         </div>
         <div className="relative z-10">
           <div className="yx-repository-intro flex min-h-8 items-center">
@@ -221,14 +164,8 @@ export function ReportsRepositoryWorkspace({
           {groupedReports.map((group, groupIndex) => {
             const project = projects.find((item) => item.id === group.projectId)
             const collapsed = !expandedProjectIds.includes(group.projectId)
-            const aiScores = group.reports.flatMap((report) => report.aiScore === undefined ? [] : [report.aiScore])
-            const completenessScores = group.reports.flatMap((report) => report.completeness === undefined ? [] : [report.completeness])
-            const averageAiScore = aiScores.length > 0
-              ? Math.round((aiScores.reduce((sum, score) => sum + score, 0) / aiScores.length) * 10) / 10
-              : undefined
-            const averageCompleteness = completenessScores.length > 0
-              ? Math.round((completenessScores.reduce((sum, score) => sum + score, 0) / completenessScores.length) * 10) / 10
-              : undefined
+            const averageAiScore = averageDefinedTenth(group.reports.map((report) => report.aiScore))
+            const averageCompleteness = averageDefinedTenth(group.reports.map((report) => report.completeness))
             const projectTitle = project?.title ?? group.projectTitle
             return (
               <section key={group.projectId} className={`relative overflow-hidden rounded-lg border bg-yx-paper shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-[border-color,box-shadow] duration-200 hover:shadow-[0_12px_28px_-14px_color-mix(in_srgb,var(--yx-brand-strong)_25%,transparent)] ${collapsed ? 'border-yx-line hover:border-yx-brand/30' : 'border-yx-brand/35'}`}>
@@ -313,7 +250,7 @@ export function ReportsRepositoryWorkspace({
                               <td className="px-4 py-3">
                                 <CellCaption label="阶段">
                                   <span className="rounded-full bg-yx-warning-soft px-2 py-0.5 text-[10px] font-semibold text-yx-warning-text">
-                                    {getReportStageLabel(report, project?.milestones)}
+                                    {reportStageLabel(report)}
                                   </span>
                                 </CellCaption>
                               </td>
@@ -346,7 +283,7 @@ export function ReportsRepositoryWorkspace({
                               </td>
                               <td className="px-4 py-3">
                                 <CellCaption label="上传时间">
-                                  <span className="text-[11px] tabular-nums text-yx-muted">{formatReportDate(report.createdAt)}</span>
+                                  <span className="text-[11px] tabular-nums text-yx-muted">{formatReportDate(report.submittedAt)}</span>
                                 </CellCaption>
                               </td>
                               <td className="px-4 py-3 text-right">

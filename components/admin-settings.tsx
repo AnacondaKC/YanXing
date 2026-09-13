@@ -1,6 +1,6 @@
 'use client'
 
-import { Check, FileCode2, FolderKanban, Gauge, Layers3, Network, Palette, Settings, Users, type LucideIcon } from 'lucide-react'
+import { Check, FileCode2, FolderKanban, Layers3, Network, Palette, Settings, Users, type LucideIcon } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { ProjectManagementSettings } from '@/components/admin/project-management-settings'
 import { createRetryableSettingsPanel } from '@/components/retryable-settings-panel'
@@ -8,17 +8,16 @@ import { AI_PROMPT_TARGETS } from '@/lib/ai/prompt-defaults'
 import { Dialog, DialogCloseButton } from '@/components/ui/dialog'
 import { useToast } from '@/components/use-toast'
 import { apiFetch } from '@/lib/client-request'
-import type { ProjectWithCapabilities } from '@/modules/projects/domain'
+import type { ManagedProject } from '@/components/admin/project-management-settings'
 import type { ManagedUser, SessionUser } from '@/modules/users/domain'
 import { modelSelectionTargets, type AiModelSettings } from '@/components/admin/ai-settings-types'
 
 const AdminModelSettings = createRetryableSettingsPanel(() => import('@/components/admin/model-settings').then((module) => module.AdminModelSettings))
-const AiBudgetSettingsPanel = createRetryableSettingsPanel(() => import('@/components/admin/ai-budget-settings').then((module) => module.AiBudgetSettingsPanel))
 const BrandingSettingsPanel = createRetryableSettingsPanel(() => import('@/components/admin/branding-settings').then((module) => module.BrandingSettingsPanel))
 const UserManagementSettings = createRetryableSettingsPanel(() => import('@/components/admin/user-management-settings').then((module) => module.UserManagementSettings))
 const PromptSettings = createRetryableSettingsPanel(() => import('@/components/prompt-settings').then((module) => module.PromptSettings))
 
-type AdminSettingsPage = 'projects' | 'users' | 'branding' | 'channels' | 'selections' | 'prompts' | 'budget'
+type AdminSettingsPage = 'projects' | 'users' | 'branding' | 'channels' | 'selections' | 'prompts'
 type NavigationItem = { id: AdminSettingsPage; label: string; icon: LucideIcon; tag?: string }
 type NavigationGroup = { label: string; items: NavigationItem[] }
 
@@ -33,10 +32,10 @@ export function AdminSettingsDialog({
   onToggleHideProject,
 }: {
   currentUser?: SessionUser
-  projects: ProjectWithCapabilities[]
+  projects: ManagedProject[]
   onClose: () => void
-  onEditProject?: (project: ProjectWithCapabilities) => void
-  onDeleteProject: (project: ProjectWithCapabilities) => void
+  onEditProject?: (project: ManagedProject) => void
+  onDeleteProject?: (project: ManagedProject) => void
   onProjectsChanged: () => void
   hiddenProjectIds?: string[]
   onToggleHideProject?: (projectId: string) => void
@@ -110,7 +109,6 @@ export function AdminSettingsDialog({
         { id: 'channels', label: '渠道模型', icon: Network, tag: channelCount !== undefined ? `${channelCount}` : undefined },
         { id: 'selections', label: '模型选择', icon: Layers3, tag: `${modelSelectionTargets.length}` },
         { id: 'prompts', label: '提示词设置', icon: FileCode2, tag: `${AI_PROMPT_TARGETS.length}` },
-        { id: 'budget', label: 'AI 使用预算', icon: Gauge },
       ],
     },
   ]
@@ -230,8 +228,6 @@ export function AdminSettingsDialog({
             />
           ) : page === 'branding' ? (
             <BrandingSettingsPanel onNotice={showNotice} />
-          ) : page === 'budget' ? (
-            <AiBudgetSettingsPanel onNotice={showNotice} />
           ) : page === 'prompts' ? (
             <PromptSettings onNotice={showNotice} />
           ) : (

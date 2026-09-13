@@ -29,7 +29,6 @@ export interface AnalysisJob {
   terminalAt?: string
   aiCallsStarted?: number
   aiCallsCompleted?: number
-  aiTokens?: number
   errorMessage?: string
   createdAt: string
   updatedAt: string
@@ -40,7 +39,6 @@ export interface AnalysisModelCall {
   model: string
   stage: 'page_analysis'
   module: 'page_analysis'
-  tokens: number
 }
 
 export interface AnalysisSnapshot {

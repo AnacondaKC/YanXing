@@ -1,11 +1,15 @@
 node_modules/
 .next/
 .next-dev/
+.next-p4-qa/
+.next-p5-qa/
+.next-ui-restore-qa/
 out/
 .env
 .env.*
 !.env.example
 /storage/
+/storage-native/
 *.log
 *.tsbuildinfo
 /:memory:

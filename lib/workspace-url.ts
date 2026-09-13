@@ -1,5 +1,5 @@
 export type WorkspaceView = 'overview' | 'reports' | 'knowledge' | 'dashboard' | 'history' | 'insight' | 'content' | 'project-guide'
-export type WorkspaceUrlState = { view: WorkspaceView; projectId: string; reportId?: string }
+export type WorkspaceUrlState = { view: WorkspaceView; projectId: string; reportId?: string; stageId?: string }
 
 const projectWorkspaceViews = new Set<WorkspaceView>(['dashboard', 'history', 'insight', 'content'])
 const knownWorkspaceViews = new Set<WorkspaceView>(['overview', 'reports', 'knowledge', ...projectWorkspaceViews, 'project-guide'])
@@ -9,6 +9,7 @@ export function parseWorkspaceSearch(search: string): WorkspaceUrlState {
   const requestedView = params.get('view') as WorkspaceView | null
   const requestedProjectId = params.get('project') ?? ''
   const requestedReportId = params.get('report') || undefined
+  const requestedStageId = params.get('stage') || undefined
   const requested = requestedView && knownWorkspaceViews.has(requestedView)
     ? requestedView
     : requestedProjectId
@@ -17,13 +18,45 @@ export function parseWorkspaceSearch(search: string): WorkspaceUrlState {
   const view = projectWorkspaceViews.has(requested) && !requestedProjectId ? 'overview' : requested
   const projectId = projectWorkspaceViews.has(view) ? requestedProjectId : ''
   const reportId = projectWorkspaceViews.has(view) ? requestedReportId : undefined
-  return reportId ? { view, projectId, reportId } : { view, projectId }
+  const stageId = projectWorkspaceViews.has(view) ? requestedStageId : undefined
+  return {
+    view,
+    projectId,
+    ...(reportId ? { reportId } : {}),
+    ...(stageId ? { stageId } : {}),
+  }
+}
+
+export function encodeWorkspaceUrlState(input: {
+  view: WorkspaceView
+  projectId: string
+  selectionSource?: string
+  stageId?: string
+  reportId?: string
+}): WorkspaceUrlState {
+  const explicit = input.selectionSource === 'explicit'
+  return {
+    view: input.view,
+    projectId: input.projectId,
+    ...(explicit && input.stageId ? { stageId: input.stageId } : {}),
+    ...(explicit && input.reportId ? { reportId: input.reportId } : {}),
+  }
+}
+
+export function sameWorkspaceLocation(
+  url: string,
+  location: Pick<Location, 'pathname' | 'search' | 'hash'> = typeof window === 'undefined'
+    ? { pathname: '/', search: '', hash: '' }
+    : window.location,
+) {
+  return url === `${location.pathname}${location.search}${location.hash}`
 }
 
 export function buildWorkspaceSearch(state: WorkspaceUrlState): string {
   const params = new URLSearchParams()
   if (state.view !== 'overview') params.set('view', state.view)
   if (projectWorkspaceViews.has(state.view) && state.projectId) params.set('project', state.projectId)
+  if (projectWorkspaceViews.has(state.view) && state.stageId) params.set('stage', state.stageId)
   if (projectWorkspaceViews.has(state.view) && state.reportId) params.set('report', state.reportId)
   const query = params.toString()
   return query ? `?${query}` : ''

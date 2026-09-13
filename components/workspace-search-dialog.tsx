@@ -3,16 +3,16 @@
 import { FolderKanban, Search, X } from 'lucide-react'
 import { useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import { Dialog } from '@/components/ui/dialog'
-import type { ProjectWithCapabilities } from '@/modules/projects/domain'
+import type { NavigationProject } from '@/components/workspace-navigation'
 
 export function WorkspaceSearchDialog({
   projects,
   onClose,
   onSelect,
 }: {
-  projects: ProjectWithCapabilities[]
+  projects: NavigationProject[]
   onClose: () => void
-  onSelect: (project: ProjectWithCapabilities) => void
+  onSelect: (project: NavigationProject) => void
 }) {
   const inputRef = useRef<HTMLInputElement>(null)
   const [query, setQuery] = useState('')
@@ -86,7 +86,7 @@ export function WorkspaceSearchDialog({
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm font-medium text-yx-ink">{project.title}</span>
                     <span className="mt-0.5 block truncate text-[11px] text-yx-muted">
-                      {project.ownerName}{project.stage ? ' · ' + project.stage : ''}
+                      {project.ownerName ?? '课题'}
                     </span>
                   </span>
                 </button>

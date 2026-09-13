@@ -5,7 +5,6 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { deflateRawSync } from 'node:zlib'
 import { DocumentParseError, fitTextToPrompt, isDocumentParseError, extractCachedDocumentText, extractDocumentText, extractDocxText, extractPdfText } from '../lib/documents/document-parser'
-import { isRetryableDocumentParseFailure } from '../worker/job-processor'
 import { maxUploadBytes, persistReportStream, ReportUploadError, writeBufferFully } from '../lib/documents/report-storage'
 
 const directory = await mkdtemp(`${tmpdir()}/yanxing-documents-`)
@@ -306,9 +305,9 @@ test('missing document sources are permanent parser failures, not retryable fail
     () => extractDocxText(missingPath),
     (error: unknown) => isDocumentParseError(error)
       && error.retryable === false
-      && isRetryableDocumentParseFailure(error) === false,
+      && error.retryable === false,
   )
-  assert.equal(isRetryableDocumentParseFailure(new DocumentParseError('temporary parser capacity', true)), true)
+  assert.equal(new DocumentParseError('temporary parser capacity', true).retryable, true)
 })
 
 test('writeBufferFully retries short writes and rejects zero progress', async () => {

@@ -74,15 +74,41 @@ test('insight mutations are rate limited after CSRF validation', () => {
   assert.match(blocked.headers.get('Retry-After') ?? '', /^[1-9]\d*$/)
 })
 
-test('analysis start and report replacement use AI-task rate limits', () => {
+test('analysis start uses AI-task rate limits', () => {
   const analysisRequest = authenticatedMutation('proxy-analysis-rate', '/api/reports/report-rate/analyze', 'POST')
   for (let attempt = 0; attempt < 12; attempt += 1) assert.equal(proxy(analysisRequest()).status, 200)
   assert.equal(proxy(analysisRequest()).status, 429)
 
-  const replacementRequest = authenticatedMutation('proxy-replace-rate', '/api/reports/report-rate', 'PUT')
-  for (let attempt = 0; attempt < 12; attempt += 1) assert.equal(proxy(replacementRequest()).status, 200)
-  assert.equal(proxy(replacementRequest()).status, 429)
 })
+
+test('native preparation retains upload rate limits without sharing the confirmation bucket',()=>{
+  const prepare=authenticatedMutation('proxy-native-prepare','/api/projects/p/report-uploads','POST')
+  for(let attempt=0;attempt<8;attempt++)assert.equal(proxy(prepare()).status,200)
+  assert.equal(proxy(prepare()).status,429)
+  const original=prepare()
+  const confirm=()=>new NextRequest('http://localhost/api/projects/p/reports',{method:'POST',headers:original.headers})
+  assert.equal(proxy(confirm()).status,200)
+})
+
+test('native retry cannot bypass the strict AI mutation limiter',()=>{
+  const retry=authenticatedMutation('proxy-native-retry','/api/jobs/task/retry','POST')
+  for(let attempt=0;attempt<4;attempt++)assert.equal(proxy(retry()).status,200)
+  assert.equal(proxy(retry()).status,429)
+})
+
+test('task retries do not consume the independent insight-start bucket', () => {
+  const retry = authenticatedMutation('proxy-native-retry-independent', '/api/jobs/task/retry', 'POST')
+  for (let attempt = 0; attempt < 4; attempt += 1) assert.equal(proxy(retry()).status, 200)
+
+  const insight = authenticatedMutation(
+    'proxy-native-retry-independent',
+    '/api/reports/report-rate/insight',
+    'POST',
+  )
+  for (let attempt = 0; attempt < 4; attempt += 1) assert.equal(proxy(insight()).status, 200)
+  assert.equal(proxy(insight()).status, 429)
+})
+
 
 test('proxy maps an unavailable rate limiter to 503', () => {
   getDatabase().close()

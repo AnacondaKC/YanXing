@@ -1,16 +1,69 @@
 import assert from 'node:assert/strict'
+import { EMPTY_WORKSPACE_CAPABILITIES } from './helpers/workspace-capabilities'
 import test from 'node:test'
 import { createElement, type ComponentProps } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { OverviewDataRegion } from '../components/overview-loading'
 import { OverviewWorkspace } from '../components/overview-workspace'
 import { combineOverviewLoadStates, settleOverviewLoadState, type OverviewLoadState } from '../lib/overview-loading'
+import { type WorkspaceOverviewStats, type WorkspaceProjectListItem, type WorkspaceReportCard } from '../lib/workspace-submission'
 
-const readyStats = {
-  totalReportVersions: 12, totalCharacters: 45000, knowledgeCount: 6, knowledgeCategoryCount: 2,
+const readyStats: WorkspaceOverviewStats = {
+  submittedReportCount: 12, completedStageCount: 2, totalCharacters: 45000, knowledgeCount: 6, knowledgeCategoryCount: 2,
   weeklyNewReports: 3, weeklyNewKnowledge: 1,
   jobStats: { completed: 4, failed: 1, cancelled: 0, running: 0, queued: 0 },
-  trends: { versions: [1, 2, 3], characters: [100, 200, 300], successRate: [80, 80, 80], knowledge: [1, 2, 6], averageScore: [70, 80], analyzedProjects: [1, 2] },
+  trends: { submissions: [1, 2, 3], characters: [100, 200, 300], successRate: [80, 80, 80], knowledge: [1, 2, 6], averageScore: [70, 80], analyzedProjects: [1, 2] },
+}
+
+function nativeCard(overrides: Partial<WorkspaceReportCard> = {}): WorkspaceReportCard {
+  return {
+    id: 'report-1',
+    projectId: 'quality-project',
+    stageId: 'stage-1',
+    stageVersion: 1,
+    submissionSequence: 1,
+    submittedAs: 'update',
+    isCurrentCompletion: false,
+    isLatestSubmission: true,
+    wasFirstStageSubmission: true,
+    title: '研究报告',
+    fileName: 'report.docx',
+    sourceSize: 1024,
+    paragraphCount: 12,
+    characterCount: 4000,
+    submittedBy: 'owner',
+    submittedAt: '2026-01-01T00:00:00.000Z',
+    labels: {
+      stageLabel: '阶段01 · 开题研究',
+      reportLabel: '开题研究 V1',
+      compactLabel: '阶段01 V1',
+      roleLabel: '阶段更新报告',
+    },
+    capabilities: { ...EMPTY_WORKSPACE_CAPABILITIES, analysisAction: 'rerun', insightAction: 'start', disabledReasons: [] },
+    comparison: { status: 'unavailable', reason: 'first_stage_submission' },
+    ...overrides,
+  }
+}
+
+function nativeProject(overrides: Partial<WorkspaceProjectListItem> = {}): WorkspaceProjectListItem {
+  return {
+    id: 'quality-project',
+    title: '质量测试课题',
+    ownerId: 'owner',
+    ownerName: '负责人',
+    objective: '',
+    description: '',
+    canManage: true,
+    canDelete: false,
+    canSubmit: true,
+    canEditPlan: true,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    submittedReportCount: 1,
+    completedStageCount: 0,
+    currentStage: { id: 'stage-1', ordinal: 1, title: '开题研究', lifecycleStatus: 'in_progress' },
+    ...overrides,
+  }
 }
 const baseProps: ComponentProps<typeof OverviewWorkspace> = {
   projects: [], recentReports: [], activityReports: [], knowledgeItems: [],
@@ -66,9 +119,9 @@ test('regions needing both sources handle every loading, success and failure com
 test('first load keeps headings and navigation visible without fabricated zeros or empty states', () => {
   const html = renderOverview()
   assert.match(html, /data-enter="true"/)
-  for (const label of ['报告版本总数', '分析质量全景', '最新报告动态', '知识库动态', '进入报告库', '进入知识库']) assert.ok(html.includes(label))
+  for (const label of ['报告提交总数', '分析质量全景', '最新报告动态', '知识库动态', '进入报告库', '进入知识库']) assert.ok(html.includes(label))
   assert.match(html, /aria-busy="true"/)
-  assert.match(html, /报告版本总数正在加载/)
+  assert.match(html, /报告提交总数正在加载/)
   assert.doesNotMatch(html, /暂无课题动态|暂无参考资料|>00<|>0<|质量标杆/)
 })
 
@@ -76,13 +129,7 @@ test('quality gauge reserves glyph padding for double and triple digit scores', 
   for (const score of [60, 80, 86, 88, 100]) {
     const html = renderOverview({
       projectsState: 'ready',
-      projects: [{
-        id: 'quality-project', ownerId: 'owner', title: '质量测试课题', objective: '',
-        description: '', ownerName: '负责人', status: 'in_progress', milestones: [],
-        createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
-        canManage: true, canDelete: true,
-        latestReport: { version: 1, aiScore: score, completeness: score },
-      }],
+      projects: [nativeProject({ latestSubmission: nativeCard({ aiScore: score, completeness: score }) })],
     })
     const quality = panelMarkup(html, '分析质量全景')
     const scoreLabel = quality.match(/<span class="([^"]*bg-clip-text[^"]*)">([0-9]+)</)
@@ -105,12 +152,12 @@ test('statistics can render while project-dependent regions are still loading', 
   assert.match(html, />12</)
   assert.match(html, /分析质量正在加载/)
   assert.match(html, /报告动态正在加载/)
-  assert.doesNotMatch(html, /知识库动态正在加载|报告版本总数正在加载/)
+  assert.doesNotMatch(html, /知识库动态正在加载|报告提交总数正在加载/)
 })
 
 test('projects can render while the independent statistics request is slow', () => {
   const html = renderOverview({ projectsState: 'ready' })
-  assert.match(html, /报告版本总数正在加载/)
+  assert.match(html, /报告提交总数正在加载/)
   assert.doesNotMatch(html, /分析质量正在加载/)
 })
 
@@ -183,6 +230,32 @@ test('only report and knowledge panel bodies opt into the fill flex chain', () =
   const statsRegion = html.slice(html.indexOf('yx-overview-stat'), html.indexOf('aria-label="分析质量全景"'))
   assert.match(statsRegion, /yx-overview-data/)
   assert.doesNotMatch(statsRegion, /flex min-h-0 flex-1 flex-col/)
+})
+
+test('missing scores stay missing while zero remains a valid quality score', () => {
+  const missingHtml = renderOverview({
+    projectsState: 'ready',
+    statsState: 'ready',
+    stats: readyStats,
+    projects: [nativeProject({ latestSubmission: nativeCard({ aiScore: undefined, completeness: undefined, capabilities: { ...EMPTY_WORKSPACE_CAPABILITIES, analysisAction: 'start', insightAction: 'none', disabledReasons: [] } }) })],
+  })
+  const missingQuality = panelMarkup(missingHtml, '分析质量全景')
+  assert.match(missingQuality, />--</)
+  assert.doesNotMatch(missingQuality, /质量标杆/)
+  assert.doesNotMatch(missingQuality, /px-1[^>]*>0</)
+
+  const zeroHtml = renderOverview({
+    projectsState: 'ready',
+    statsState: 'ready',
+    stats: readyStats,
+    projects: [nativeProject({ latestSubmission: nativeCard({ aiScore: 0, completeness: 0 }) })],
+  })
+  const zeroQuality = panelMarkup(zeroHtml, '分析质量全景')
+  const scoreLabel = zeroQuality.match(/<span class="([^"]*px-1[^"]*)">([0-9]+)</)
+  assert.ok(scoreLabel)
+  assert.equal(scoreLabel[2], '0')
+  assert.match(zeroQuality, />0%</)
+  assert.match(zeroQuality, /质量标杆/)
 })
 
 test('loading report and knowledge panels keep aria-busy fill wrappers without empty states', () => {

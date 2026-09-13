@@ -1,16 +1,8 @@
-import { accountModelTokens, ModelUsageIncompleteError, type ModelUsage } from '@/lib/ai/usage'
-
 export type ModelProviderErrorInit = {
   status?: number
   code?: string
   retryable?: boolean
   retryAfterMs?: number
-}
-
-export type CompletedModelUsage = {
-  inputTokens: number
-  outputTokens: number
-  totalTokens: number
 }
 
 export class ModelProviderError extends Error {
@@ -30,7 +22,7 @@ export class ModelProviderError extends Error {
 }
 
 export class ChatCompletionsError extends ModelProviderError {
-  readonly usage?: CompletedModelUsage
+  readonly completed?: boolean
   readonly provider?: string
   readonly model?: string
 
@@ -39,7 +31,7 @@ export class ChatCompletionsError extends ModelProviderError {
     status?: number,
     retryAfterMs?: number,
     init: Pick<ModelProviderErrorInit, 'code' | 'retryable'> & {
-      usage?: CompletedModelUsage
+      completed?: boolean
       provider?: string
       model?: string
     } = {},
@@ -51,30 +43,19 @@ export class ChatCompletionsError extends ModelProviderError {
       retryable: init.retryable ?? isRetryableProviderStatus(status, init.code),
     })
     this.name = 'ChatCompletionsError'
-    this.usage = init.usage
+    this.completed = init.completed
     this.provider = init.provider
     this.model = init.model
   }
 }
 
-export function tryCompletedUsage(usage: ModelUsage) {
-  try {
-    return accountModelTokens(usage)
-  } catch (error) {
-    if (error instanceof ModelUsageIncompleteError) return undefined
-    throw error
-  }
-}
-
-export function withCompletedUsage(error: unknown, usage: ModelUsage, identity: { provider: string; model: string }): never {
-  const completed = tryCompletedUsage(usage)
-  if (!completed) throw error
-  if (error instanceof ChatCompletionsError && error.usage) throw error
+export function withCompletedCall(error: unknown, identity: { provider: string; model: string }): never {
+  if (error instanceof ChatCompletionsError && error.completed) throw error
   if (error instanceof ChatCompletionsError) {
     throw new ChatCompletionsError(error.message, error.status, error.retryAfterMs, {
       code: error.code,
       retryable: error.retryable,
-      usage: completed,
+      completed: true,
       provider: identity.provider,
       model: identity.model,
     })
@@ -82,18 +63,17 @@ export function withCompletedUsage(error: unknown, usage: ModelUsage, identity: 
   throw new ChatCompletionsError(error instanceof Error ? error.message : String(error), undefined, undefined, {
     code: 'invalid_model_output',
     retryable: false,
-    usage: completed,
+    completed: true,
     provider: identity.provider,
     model: identity.model,
   })
 }
 
 export function completedCallFromError(error: unknown) {
-  if (!(error instanceof ChatCompletionsError) || !error.usage || !error.provider || !error.model) return undefined
+  if (!(error instanceof ChatCompletionsError) || !error.completed || !error.provider || !error.model) return undefined
   return {
     provider: error.provider,
     model: error.model,
-    tokens: error.usage.totalTokens,
   }
 }
 

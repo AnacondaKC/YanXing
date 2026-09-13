@@ -16,6 +16,9 @@ export const NEXT_ENV_PACKAGE_NAME = '@next/env'
 export const CANVAS_PACKAGE_NAME = '@napi-rs/canvas'
 export const COMPILED_RUNTIME_ENTRY_SOURCES = [
   'worker/index.ts',
+  'worker/submission-index.ts',
+  'scripts/recover-report-uploads.ts',
+  'scripts/native-backup.ts',
   'scripts/migrate.ts',
   'scripts/create-user.ts',
   'scripts/storage-maintenance.ts',
@@ -63,15 +66,18 @@ export async function buildYanXingRuntime(root = projectRoot) {
 export function shouldIgnoreTracedFile(relativePath) {
   const posix = toPosix(relativePath)
   if (isPrivateTracePath(posix)) return true
-  if (posix.startsWith('.git/')) return true
+  const topLevel = posix.split('/')[0]
+  if (/^\.next(?:-|$)/.test(topLevel)) return true
+  if (['.git', '.docker-runtime', 'out', 'test', 'docs', 'coverage'].includes(topLevel)) return true
   return isIgnoredCompilerPackage(posix)
 }
 
 export function isPrivateTracePath(relativePath) {
   const posix = toPosix(relativePath)
-  if (posix === 'storage' || posix.startsWith('storage/')) return true
+  if (['storage', 'storage-native'].includes(posix.split('/')[0])) return true
   if (posix === '.env' || posix.startsWith('.env.')) return true
   const baseName = posix.slice(posix.lastIndexOf('/') + 1)
+  if (baseName === '.settings-key') return true
   const atProjectRoot = !posix.includes('/')
   if ((atProjectRoot || posix.startsWith('storage/')) && /\.sqlite(?:-shm|-wal)?$/.test(baseName)) return true
   return false

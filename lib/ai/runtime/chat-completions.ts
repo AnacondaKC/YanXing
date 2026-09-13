@@ -13,25 +13,12 @@ export interface ChatCompletionsModel {
   reasoningEffort?: ReasoningEffort
 }
 
-export interface ChatCompletionsUsage {
-  inputTokens: number
-  outputTokens: number
-  totalTokens: number
-  /** Provider reported complete input, output, and total token usage. */
-  usageComplete?: boolean
-  cacheHitTokens?: number
-  cacheMissTokens?: number
-  reasoningTokens?: number
-}
-
 export interface ChatCompletionsStructuredJsonResult {
   value: unknown
-  usage: ChatCompletionsUsage
 }
 
 export interface ChatCompletionsTextResult {
   content: string
-  usage: ChatCompletionsUsage
 }
 
 export interface ChatCompletionsTextInput {

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import test from 'node:test'
 import { createElement, lazy, Suspense, type ComponentType } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -12,17 +12,17 @@ import {
   settingsPanelStatusCopy,
 } from '../components/retryable-settings-panel'
 
-const dashboard = readFileSync(new URL('../components/dashboard.tsx', import.meta.url), 'utf8')
+const dashboard = readFileSync(new URL('../components/workspace-app.tsx', import.meta.url), 'utf8')
 const settings = readFileSync(new URL('../components/admin-settings.tsx', import.meta.url), 'utf8')
 const retryablePanel = readFileSync(new URL('../components/retryable-settings-panel.tsx', import.meta.url), 'utf8')
 const topbar = readFileSync(new URL('../components/workspace-user-nav.tsx', import.meta.url), 'utf8')
-const optionalPanels = ['AdminModelSettings', 'AiBudgetSettingsPanel', 'BrandingSettingsPanel', 'UserManagementSettings', 'PromptSettings'] as const
+const optionalPanels = ['AdminModelSettings', 'BrandingSettingsPanel', 'UserManagementSettings', 'PromptSettings'] as const
 
 test('cold dialog suspension is contained inside the workspace rather than replacing it', () => {
   const source = ts.createSourceFile('dashboard.tsx', dashboard, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
   let foundDialog = false
   function visit(node: ts.Node) {
-    if (ts.isJsxSelfClosingElement(node) && node.tagName.getText(source) === 'WorkspaceDialogs') {
+    if (ts.isJsxSelfClosingElement(node) && node.tagName.getText(source) === 'AdminSettingsDialog') {
       foundDialog = true
       assert.ok(ts.isJsxElement(node.parent))
       assert.equal(node.parent.openingElement.tagName.getText(source), 'Suspense')
@@ -52,6 +52,19 @@ test('other workspace dialogs show nonblocking loading feedback', () => {
   const html = renderToStaticMarkup(createElement(WorkspaceDialogLoading))
   assert.match(html, /role="status"/)
   assert.doesNotMatch(html, /role="dialog"/)
+})
+
+test('settings no longer expose a budget page or API', () => {
+  assert.doesNotMatch(settings, /AiBudgetSettingsPanel|ai-budget-settings|AI 使用预算|'budget'/)
+  for (const path of [
+    '../components/admin/ai-budget-settings.tsx',
+    '../components/admin/ai-budget-settings-form.ts',
+    '../app/api/admin/ai-budget-settings/route.ts',
+    '../lib/ai/budget-settings.ts',
+    '../lib/db/ai-budget-settings-repository.ts',
+  ]) {
+    assert.equal(existsSync(new URL(path, import.meta.url)), false, path)
+  }
 })
 
 test('optional settings pages have local retryable lazy boundaries and are not eager imports', () => {

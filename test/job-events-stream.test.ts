@@ -1,67 +1,49 @@
 import assert from 'node:assert/strict'
-import test from 'node:test'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import test from 'node:test'
+import { tableExists } from '../lib/db/native-schema'
 
-const directory = await mkdtemp(tmpdir() + '/yanxing-job-events-')
+const directory = await mkdtemp(path.join(tmpdir(), 'yanxing-job-events-'))
 process.env.YANXING_DATABASE_PATH = path.join(directory, 'job-events.sqlite')
+process.env.YANXING_SETTINGS_ENCRYPTION_KEY='native-route-fixture-encryption-key'
+process.env.YANXING_CHAT_COMPLETIONS_API_KEY='test-key-never-used-for-network'
 
-const { migrateDatabase, getDatabase } = await import('../lib/db/client')
+const { getDatabase } = await import('../lib/db/client')
 const { createOrUpdateUser, createSession, sessionCookieName } = await import('../lib/auth/session')
-const { createProjectForUser, createReportJob, getJobEvents, updateProject } = await import('../lib/db/repository')
+const { createNativeProject, nativeWorkspace, submitNativeReport } = await import('./helpers/native-project')
 const { GET: streamJobEvents } = await import('../app/api/jobs/[jobId]/events/route')
-
-migrateDatabase()
 
 test.after(async () => {
   await rm(directory, { recursive: true, force: true })
 })
 
-function createCompletedJob() {
+function createQueuedJob() {
   const owner = createOrUpdateUser({
     username: 'events-owner-' + Math.random().toString(36).slice(2, 8),
     displayName: '事件流负责人',
     password: 'password-events-123',
     role: 'researcher',
   })
-  const project = createProjectForUser({ title: '事件流课题', objective: '', description: '', ownerName: owner.displayName }, owner.id)
-  updateProject(project.id, {
-    objective: '识别关键问题并形成决策建议',
-    description: '围绕行业现状、风险与实施条件开展研究',
-    milestones: [{ id: 'stage-1', title: '事实调研', targetDate: '2026-06-30', description: '形成研究依据并交付事实清单', status: 'in_progress' }],
-  })
-  const created = createReportJob({
-    projectId: project.id,
-    fileName: 'events.docx',
-    source: {
-      path: path.join(directory, 'source-' + Math.random().toString(36).slice(2) + '.docx'),
-      fileName: 'events.docx',
-      mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      size: 100,
-      sha256: 'events-hash-' + Math.random().toString(36).slice(2),
-    },
-    reportId: undefined,
-    milestoneId: 'stage-1',
-    autoAnalyze: true,
-    deliveryType: undefined,
-    actor: owner,
-  })
-  assert.ok(created.job)
-  getDatabase().prepare("UPDATE analysis_jobs SET status = 'completed' WHERE id = ?").run(created.job.id)
-  return { owner, jobId: created.job.id, token: createSession(owner.id).token }
+  const project = createNativeProject({ database: getDatabase(), ownerId: owner.id, title: '事件流课题' })
+  const submitted = submitNativeReport({ database: getDatabase(), actorId: owner.id, projectId: project.id })
+  const admitted = nativeWorkspace(getDatabase()).runtime.tasks.admit({ actorId: owner.id, reportId: submitted.reportId, operation: 'analysis' })
+  return { owner, jobId: admitted.task.id, reportId: submitted.reportId, token: createSession(owner.id).token }
 }
 
 function lastEventId(jobId: string) {
-  return getJobEvents(jobId, 0, 500).at(-1)?.id ?? 0
+  const row = getDatabase().prepare('SELECT MAX(id) AS id FROM submission_task_events WHERE job_id = ?').get(jobId) as { id?: number } | undefined
+  return Number(row?.id ?? 0)
 }
 
-function insertEvents(jobId: string, count: number) {
-  const statement = getDatabase().prepare('INSERT INTO job_events(job_id, type, errors_json, message, created_at) VALUES (?, ?, ?, ?, ?)')
+function insertEvents(jobId: string, count: number, kind = 'progress') {
+  const task = getDatabase().prepare('SELECT report_id, actor_id FROM submission_tasks WHERE id = ?').get(jobId) as { report_id: string; actor_id: string }
+  const statement = getDatabase().prepare('INSERT INTO submission_task_events(job_id, report_id, actor_id, kind, message, created_at) VALUES (?, ?, ?, ?, ?, ?)')
   const createdAt = new Date().toISOString()
   const ids: number[] = []
   for (let index = 0; index < count; index += 1) {
-    const result = statement.run(jobId, 'info', '[]', 'event-' + index, createdAt)
+    const result = statement.run(jobId, task.report_id, task.actor_id, kind, 'event-' + index, createdAt)
     ids.push(Number(result.lastInsertRowid))
   }
   return ids
@@ -86,7 +68,7 @@ async function readSse(response: Response, expectedCount: number) {
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
-  const events: Array<{ id: number; type: string }> = []
+  const events: Array<{ id: number; type: string; data: string }> = []
   try {
     while (events.length < expectedCount) {
       const chunk = await reader.read()
@@ -98,7 +80,8 @@ async function readSse(response: Response, expectedCount: number) {
         if (!part || part.startsWith(':')) continue
         const idLine = part.split('\n').find((line) => line.startsWith('id: '))
         const eventLine = part.split('\n').find((line) => line.startsWith('event: '))
-        if (idLine) events.push({ id: Number(idLine.slice(4)), type: eventLine?.slice(7) ?? '' })
+        const dataLine = part.split('\n').find((line) => line.startsWith('data: '))
+        if (idLine) events.push({ id: Number(idLine.slice(4)), type: eventLine?.slice(7) ?? '', data: dataLine?.slice(6) ?? '' })
       }
     }
   } finally {
@@ -107,8 +90,17 @@ async function readSse(response: Response, expectedCount: number) {
   return events
 }
 
+test('native database rejects retired job_events streaming', async () => {
+  const database = getDatabase()
+  assert.equal(tableExists(database, 'job_events'), false)
+  assert.equal(tableExists(database, 'analysis_jobs'), false)
+  const response = await streamJobEvents(new Request('http://localhost/api/jobs/missing/events'), { params: Promise.resolve({ jobId: 'missing' }) })
+  assert.notEqual(response.status, 200)
+  assert.equal(tableExists(database, 'job_events'), false)
+})
+
 test('100-event backlog is drained without 700ms pacing', async () => {
-  const { jobId, token } = createCompletedJob()
+  const { jobId, token } = createQueuedJob()
   const after = lastEventId(jobId)
   const ids = insertEvents(jobId, 100)
   const startedAt = Date.now()
@@ -119,7 +111,7 @@ test('100-event backlog is drained without 700ms pacing', async () => {
 })
 
 test('500-event backlog is pulled in bounded batches without idle waits', async () => {
-  const { jobId, token } = createCompletedJob()
+  const { jobId, token } = createQueuedJob()
   const after = lastEventId(jobId)
   const ids = insertEvents(jobId, 500)
   const startedAt = Date.now()
@@ -131,7 +123,7 @@ test('500-event backlog is pulled in bounded batches without idle waits', async 
 })
 
 test('Last-Event-ID wins and invalid headers fall back to the after cursor', async () => {
-  const { jobId, token } = createCompletedJob()
+  const { jobId, token } = createQueuedJob()
   const ids = insertEvents(jobId, 20)
   const headerEvents = await readSse(await streamJobEvents(eventsRequest(jobId, token, { lastEventId: String(ids[9]) }), { params: Promise.resolve({ jobId }) }), 10)
   assert.deepEqual(headerEvents.map((event) => event.id), ids.slice(10))
@@ -139,8 +131,8 @@ test('Last-Event-ID wins and invalid headers fall back to the after cursor', asy
   assert.deepEqual(queryEvents.map((event) => event.id), ids.slice(5))
 })
 
-test('terminal jobs still deliver the last remaining events', async () => {
-  const { jobId, token } = createCompletedJob()
+test('queued jobs still deliver the last remaining events', async () => {
+  const { jobId, token } = createQueuedJob()
   const ids = insertEvents(jobId, 150)
   const events = await readSse(await streamJobEvents(eventsRequest(jobId, token, { after: ids[119] }), { params: Promise.resolve({ jobId }) }), 30)
   assert.equal(events.length, 30)
@@ -148,7 +140,7 @@ test('terminal jobs still deliver the last remaining events', async () => {
 })
 
 test('aborting a stream releases the per-user connection slot', async () => {
-  const { jobId, token } = createCompletedJob()
+  const { jobId, token } = createQueuedJob()
   insertEvents(jobId, 1)
   const controller = new AbortController()
   const held = await streamJobEvents(eventsRequest(jobId, token, { signal: controller.signal }), { params: Promise.resolve({ jobId }) })
@@ -158,4 +150,20 @@ test('aborting a stream releases the per-user connection slot', async () => {
   const next = await streamJobEvents(eventsRequest(jobId, token), { params: Promise.resolve({ jobId }) })
   assert.equal(next.status, 200)
   await next.body?.cancel()
+})
+
+test('cancel releases exactly one connection slot even when abort and body cancellation both fire',async()=>{
+  const {jobId,token}=createQueuedJob()
+  const responses:Response[]=[]
+  const controller=new AbortController()
+  try {
+    responses.push(await streamJobEvents(eventsRequest(jobId,token,{signal:controller.signal}),{params:Promise.resolve({jobId})}))
+    for(let index=1;index<20;index++)responses.push(await streamJobEvents(eventsRequest(jobId,token),{params:Promise.resolve({jobId})}))
+    assert.ok(responses.every(response=>response.status===200))
+    assert.equal((await streamJobEvents(eventsRequest(jobId,token),{params:Promise.resolve({jobId})})).status,429)
+    controller.abort();await responses[0].body?.cancel()
+    const replacement=await streamJobEvents(eventsRequest(jobId,token),{params:Promise.resolve({jobId})})
+    assert.equal(replacement.status,200);responses.push(replacement)
+    assert.equal((await streamJobEvents(eventsRequest(jobId,token),{params:Promise.resolve({jobId})})).status,429)
+  }finally{await Promise.all(responses.map(response=>response.body?.cancel()))}
 })

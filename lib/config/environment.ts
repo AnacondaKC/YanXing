@@ -31,10 +31,10 @@ function readIntegerAtLeast(name: string, fallback: number, minimum: number): nu
   return Number.isInteger(parsed) && parsed >= minimum ? parsed : fallback
 }
 
-function readTimerMsAtLeast(name: string, fallback: number, minimum: number): number {
-  const parsed = Number(readRaw(name))
-  if (!Number.isInteger(parsed) || parsed < minimum || parsed > NODE_MAX_TIMER_MS) return fallback
-  return parsed
+function readWorkerPollMs(): number {
+  const parsed = Number(readRaw('YANXING_WORKER_POLL_MS'))
+  // Keep the heartbeat interval within docker-healthcheck.mjs's accepted range.
+  return Number.isInteger(parsed) && parsed >= 100 && parsed <= 600_000 ? parsed : 1_000
 }
 
 function readBoundedInteger(name: string, fallback: number, minimum: number, maximum: number): number {
@@ -112,15 +112,9 @@ export const runtimeConfig = {
 
   get ai() {
     return {
-      dailyTokens: readPositiveInteger('YANXING_AI_DAILY_TOKENS', 5_000_000),
-      sevenDayTokens: readPositiveInteger('YANXING_AI_SEVEN_DAY_TOKENS', 35_000_000),
       globalQueueLimit: readPositiveInteger('YANXING_AI_GLOBAL_QUEUE_LIMIT', 64),
-      insightEstimatedTokens: readPositiveInteger('YANXING_AI_INSIGHT_ESTIMATED_TOKENS', 120_000),
       insightQueueLimit: readPositiveInteger('YANXING_AI_INSIGHT_QUEUE_LIMIT', 16),
-      pageAnalysisEstimatedTokens: readPositiveInteger('YANXING_AI_PAGE_ANALYSIS_ESTIMATED_TOKENS', 100_000),
       projectQueueLimit: readPositiveInteger('YANXING_AI_PROJECT_QUEUE_LIMIT', 8),
-      reconciliationIntervalMs: readTimerMs('YANXING_AI_RECONCILIATION_INTERVAL_MS', 30_000),
-      reservationTtlMs: readPositiveInteger('YANXING_AI_RESERVATION_TTL_MS', 24 * 60 * 60 * 1000),
       userQueueLimit: readPositiveInteger('YANXING_AI_USER_QUEUE_LIMIT', 16),
     }
   },
@@ -176,13 +170,10 @@ export const runtimeConfig = {
       concurrency: readBoundedInteger('YANXING_WORKER_CONCURRENCY', 3, 1, 3),
       leaseMs: readIntegerAtLeast('YANXING_WORKER_LEASE_MS', 60_000, 4_000),
       maxAttempts: readPositiveInteger('YANXING_WORKER_MAX_ATTEMPTS', 5),
-      pollMs: readTimerMsAtLeast('YANXING_WORKER_POLL_MS', 1_000, 100),
+      pollMs: readWorkerPollMs(),
       retryBaseMs: readTimerMs('YANXING_WORKER_RETRY_BASE_MS', 5_000),
       retryMaxMs: readTimerMs('YANXING_WORKER_RETRY_MAX_MS', 5 * 60_000),
     }
   },
 
-  get jobEventsRetentionDays(): number {
-    return readPositiveInteger('YANXING_JOB_EVENTS_RETENTION_DAYS', 90)
-  },
 } as const

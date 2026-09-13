@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto'
 import { PromptBudgetError } from '@/lib/ai/prompt-budget'
 import { runAnalysisModuleAgent } from '@/lib/ai/restricted-analysis-agent'
 import { completedCallFromError } from '@/lib/ai/runtime/errors'
-import { extractCachedDocumentText } from '@/lib/documents/document-parser'
 import { retryOnSqliteBusy } from '@/lib/db/checkpoint-retry'
 import { createModelRuntime, getRetryAfterMs, isRetryableModelError } from '@/lib/ai/model-router'
 import { validateModuleOutput, validatePageAnalysisOutput } from '@/modules/analysis/gates'
@@ -10,25 +9,35 @@ import { pageAnalysisModule } from '@/modules/analysis/modules'
 import { normalizePageMindMapPayload } from '@/modules/analysis/mind-map'
 import { buildVisualizationWordCloudItems, completeWordCloudOutput } from '@/modules/analysis/word-cloud'
 import type { AnalysisModuleContext } from '@/modules/analysis/module'
-import { AnalysisLeaseLostError, type AnalysisCallCheckpoint, type AnalysisEventPublisher, type AnalysisFinalization, type AnalysisPipelineRepository, type AnalysisSnapshotWrite } from '@/modules/analysis/ports'
+import { AnalysisLeaseLostError, type AnalysisCallCheckpoint, type AnalysisEventPublisher, type AnalysisExecutionRepository, type AnalysisFinalization, type AnalysisSnapshotWrite } from '@/modules/analysis/ports'
 import type { AnalysisJob, AnalysisSnapshot } from '@/modules/analysis/domain'
+import type { ExtractedDocumentText } from '@/lib/documents/document-parser'
 import { ANALYSIS_SNAPSHOT_SCHEMA_VERSION, AiScoreDimensions, AnalysisStages, MAX_AI_SUGGESTIONS, MAX_MINDMAP_CHILDREN, MAX_MINDMAP_NODES, RESEARCH_METHODS, ReportCompletenessDimensions, type AiScore, type AnalysisArtifactRecord, type AnalysisModuleId, type AnalysisModuleState, type AnalysisPromptConfig, type AnalysisSnapshotPayload, type AnalysisStage, type AnalysisTrackedModuleId, type GateError, type PageAnalysisArtifact, type PageAnalysisMindMapNode, type ReportCompletenessArtifact, type ReportFacts, type VisualizationArtifact } from '@/modules/contracts/analysis'
 
-export interface PipelineContext {
+export interface AnalysisExecutionContext {
   jobId: string
-  reportVersionId: string
-  repository: AnalysisPipelineRepository
+  reportId: string
+  repository: AnalysisExecutionRepository
   publisher: AnalysisEventPublisher
   signal?: AbortSignal
   leaseOwner?: string
+  documentText?: ExtractedDocumentText
+  runModuleAgent?: typeof runAnalysisModuleAgent
+  createRuntime?: typeof createModelRuntime
 }
 
-export async function runAnalysisPipeline(context: PipelineContext): Promise<AnalysisSnapshot> {
+async function loadAnalysisDocument(context: AnalysisExecutionContext): Promise<ExtractedDocumentText> {
+  if (context.documentText) return context.documentText
+  const prepared = context.repository.getDocumentText?.(context.reportId)
+  if (prepared?.text) return prepared
+  throw new Error('报告正文不存在，无法提交给 AI。')
+}
+
+export async function runAnalysisExecution(context: AnalysisExecutionContext): Promise<AnalysisSnapshot> {
   const job = context.repository.getJob(context.jobId)
-  const report = context.repository.getReport(context.reportVersionId)
-  if (!job || !report) throw new Error('分析任务或报告版本不存在。')
-  let facts = context.repository.getReportFacts(context.reportVersionId)
-  const reportSource = context.repository.getReportSource(context.reportVersionId)
+  if (!job) throw new Error('分析任务或报告版本不存在。')
+  let facts = context.repository.getReportFacts(context.reportId)
+  const reportSource = context.repository.getReportSource(context.reportId)
   if (!reportSource) throw new Error('报告原始文件不存在，无法提交给 AI。')
   const evaluationContext = context.repository.getJobEvaluationContext(context.jobId)
   const frozenPromptSettings = context.repository.getPromptSettings(context.jobId)
@@ -43,14 +52,15 @@ export async function runAnalysisPipeline(context: PipelineContext): Promise<Ana
   const modelCalls = recoverModelCalls(job, persistedArtifacts, latestPartial?.modelCalls ?? [])
   updateStage(context, 'validating', '正在检查文件并提取报告正文。')
   const needsModelCall = !accepted.has('page_analysis')
-  const modelRuntime = needsModelCall ? createModelRuntime('page_analysis', context.repository.getJobModelRuntime(context.jobId)) : undefined
-  const extractedDocument = needsModelCall ? await extractCachedDocumentText(reportSource.path, context.signal) : undefined
+  const extractedDocument = needsModelCall ? await loadAnalysisDocument(context) : undefined
   if (extractedDocument) {
     facts = buildReportFactsFromExtractedDocument(facts, extractedDocument)
-    if (!context.repository.saveAiReportFacts(context.reportVersionId, facts)) throw new Error('报告本地事实保存失败。')
+    if (!context.repository.saveReportFacts(context.reportId, facts)) throw new Error('报告本地事实保存失败。')
   }
   safePublish(context, { jobId: context.jobId, type: 'info', stage: 'validating', message: needsModelCall ? '报告文件已提取为纯文本，开始生成分析页。' : '已恢复通过门禁的分析页产物，准备发布。' })
   if (needsModelCall) {
+    const createRuntime = context.createRuntime ?? createModelRuntime
+    const modelRuntime = createRuntime('page_analysis', context.repository.getJobModelRuntime(context.jobId))
     if (!modelRuntime) throw new Error('分析页未解析到模型配置。')
     updateStage(context, 'page_analysis', '正在生成分析页。')
     const persistedState = persistedModuleStates.get('page_analysis')
@@ -67,13 +77,14 @@ export async function runAnalysisPipeline(context: PipelineContext): Promise<Ana
       for (let attempt = completedAttempts + 1; attempt <= definition.maxAttempts; attempt += 1) {
         throwIfCancelled(context)
         let aiCallStartedForAttempt = false
-        const moduleContext: AnalysisModuleContext & { attempt: number; previousErrors: GateError[] } = { jobId: context.jobId, reportVersionId: context.reportVersionId, reportFacts: facts, reportSource, evaluationContext, maxContextCharacters: modelRuntime.maxContextCharacters, promptConfig: pagePrompt, attempt, previousErrors }
+        const moduleContext: AnalysisModuleContext & { attempt: number; previousErrors: GateError[] } = { jobId: context.jobId, reportVersionId: context.reportId, reportFacts: facts, reportSource, evaluationContext, maxContextCharacters: modelRuntime.maxContextCharacters, promptConfig: pagePrompt, attempt, previousErrors }
         saveModuleState(context, { moduleId: 'page_analysis', status: attempt === 1 ? 'running' : 'retrying', attempt, maxAttempts: definition.maxAttempts, gateErrors: previousErrors, updatedAt: now() })
         if (attempt > 1) safePublish(context, { jobId: context.jobId, type: 'module_retrying', stage: 'page_analysis', moduleId: 'page_analysis', message: `分析页根据门禁错误重新生成第 ${attempt} 次。`, errors: previousErrors })
         throwIfCancelled(context)
+        const runAgent = context.runModuleAgent ?? runAnalysisModuleAgent
         let generated: Awaited<ReturnType<typeof runAnalysisModuleAgent>>
         try {
-          generated = await runAnalysisModuleAgent({
+          generated = await runAgent({
             moduleId: 'page_analysis',
             prompt: definition.buildPrompt(moduleContext),
             promptConfig: pagePrompt,
@@ -88,14 +99,14 @@ export async function runAnalysisPipeline(context: PipelineContext): Promise<Ana
             },
           })
         } catch (error) {
-          const billed = billedDetailsFromError(error, attempt)
-          if (billed) {
+          const completed = completedDetailsFromError(error, attempt)
+          if (completed) {
             const errors = toModelFailureErrors(error)
             previousErrors = errors
-            const failedArtifact = createFailedArtifact(context, definition, pagePrompt, attempt, errors, billed.provider, billed.model, { error: errors[0]?.message ?? '模型调用失败。' })
+            const failedArtifact = createFailedArtifact(context, definition, pagePrompt, attempt, errors, completed.provider, completed.model, { error: errors[0]?.message ?? '模型调用失败。' })
             const failedState: AnalysisModuleState = { moduleId: 'page_analysis', status: 'failed', attempt, maxAttempts: definition.maxAttempts, artifactId: failedArtifact.id, gateErrors: errors, updatedAt: now() }
-            modelCalls.push(toSnapshotModelCall(billed))
-            await checkpointCompletedAttempt(context, facts, accepted, modelCalls, billed, failedArtifact, failedState)
+            modelCalls.push(toSnapshotModelCall(completed))
+            await checkpointCompletedAttempt(context, facts, accepted, modelCalls, completed, failedArtifact, failedState)
             throwIfCancelled(context)
             safePublish(context, { jobId: context.jobId, type: 'module_failed', stage: 'page_analysis', moduleId: 'page_analysis', message: '分析页执行失败。', errors })
             break
@@ -134,7 +145,7 @@ export async function runAnalysisPipeline(context: PipelineContext): Promise<Ana
           if (repairedPaths.length) reportMindMapRepairs(context, { attempt, paths: repairedPaths })
           if (gate.accepted) {
             const acceptedAt = now()
-            const acceptedArtifact: AnalysisArtifactRecord = { id: `artifact-${context.jobId}-page_analysis-${attempt}`, jobId: context.jobId, reportVersionId: context.reportVersionId, moduleId: 'page_analysis', schemaVersion: definition.schemaVersion, promptVersion: artifactPromptVersion(definition, pagePrompt), attempt, status: 'accepted', payload: gate.value, gateErrors: [], provider: generated.provider, model: generated.model, createdAt: acceptedAt, acceptedAt }
+            const acceptedArtifact: AnalysisArtifactRecord = { id: `artifact-${context.jobId}-page_analysis-${attempt}`, jobId: context.jobId, reportVersionId: context.reportId, moduleId: 'page_analysis', schemaVersion: definition.schemaVersion, promptVersion: artifactPromptVersion(definition, pagePrompt), attempt, status: 'accepted', payload: gate.value, gateErrors: [], provider: generated.provider, model: generated.model, createdAt: acceptedAt, acceptedAt }
             const acceptedState: AnalysisModuleState = { moduleId: 'page_analysis', status: 'accepted', attempt, maxAttempts: definition.maxAttempts, artifactId: acceptedArtifact.id, gateErrors: [], updatedAt: acceptedAt }
             accepted.set('page_analysis', acceptedArtifact)
             await checkpointCompletedAttempt(context, facts, accepted, modelCalls, details, acceptedArtifact, acceptedState)
@@ -151,23 +162,19 @@ export async function runAnalysisPipeline(context: PipelineContext): Promise<Ana
             break
           }
         } catch (error) {
-          if (shouldSettleCancelledUsage(context)) {
+          if (shouldSettleCancelledCall(context) || isLostLease(error)) {
             const cancelledArtifact = createFailedArtifact(
               context,
               definition,
               pagePrompt,
               attempt,
-              [{ code: 'CANCELLED_AFTER_USAGE', path: '', message: '任务取消后已核销本次 AI 用量，未发布结果。' }],
+              [{ code: 'CANCELLED_AFTER_CALL', path: '', message: '任务取消后已记录本次 AI 调用完成，未发布结果。' }],
               generated.provider,
               generated.model,
               boundedFailedPayload(generated.payload),
             )
-            context.repository.settleCancelledAiCall({
-              jobId: context.jobId,
-              details,
-              artifact: toFailedSettlementArtifact(cancelledArtifact),
-            })
-            throwIfCancelled(context)
+            settleCompletedCall(context, details, toFailedSettlementArtifact(cancelledArtifact))
+            if (shouldSettleCancelledCall(context)) throwIfCancelled(context)
           }
           throw error
         }
@@ -184,14 +191,13 @@ function boundedFailedPayload(payload: unknown) {
   return { truncated: true, originalCharacters: serialized.length, preview: serialized.slice(0, maxStoredCharacters) }
 }
 
-function recoverModelCalls(job: AnalysisJob, artifacts: AnalysisArtifactRecord[], existing: AnalysisSnapshot['modelCalls']): AnalysisSnapshot['modelCalls'] {
+function recoverModelCalls(job: Pick<AnalysisJob, 'aiCallsCompleted'>, artifacts: AnalysisArtifactRecord[], existing: AnalysisSnapshot['modelCalls']): AnalysisSnapshot['modelCalls'] {
   const expectedCalls = Math.max(0, Number(job.aiCallsCompleted ?? 0))
   const normalizedExisting = existing.map((call) => ({
     provider: call.provider,
     model: call.model,
     stage: 'page_analysis' as const,
     module: 'page_analysis' as const,
-    tokens: call.tokens,
   }))
   if (normalizedExisting.length >= expectedCalls) return normalizedExisting
   const candidate = artifacts
@@ -200,23 +206,19 @@ function recoverModelCalls(job: AnalysisJob, artifacts: AnalysisArtifactRecord[]
     .sort((left, right) => right.attempt - left.attempt)[0]
   if (!candidate) return normalizedExisting
   const missingCalls = expectedCalls - normalizedExisting.length
-  const knownTokens = normalizedExisting.reduce((total, call) => total + Math.max(0, Number.isSafeInteger(call.tokens) ? call.tokens : 0), 0)
-  const remainingTokens = Math.max(0, (job.aiTokens ?? 0) - knownTokens)
   return [
     ...normalizedExisting,
-    ...Array.from({ length: missingCalls }, (_, index) => ({
+    ...Array.from({ length: missingCalls }, () => ({
       provider: candidate.provider!,
       model: candidate.model!,
       stage: 'page_analysis' as const,
       module: 'page_analysis' as const,
-      tokens: index === missingCalls - 1 ? remainingTokens : 0,
     })),
   ]
 }
 
 function toAnalysisCallDetails(generated: Awaited<ReturnType<typeof runAnalysisModuleAgent>>, attempt: number) {
-  if (!Number.isSafeInteger(generated.tokens) || generated.tokens < 0) throw new Error('模型返回的 token usage 无效，无法记录 token 用量。')
-  return { provider: generated.provider, model: generated.model, module: 'page_analysis' as const, stage: 'page_analysis' as const, attempt, tokens: generated.tokens }
+  return { provider: generated.provider, model: generated.model, module: 'page_analysis' as const, stage: 'page_analysis' as const, attempt }
 }
 
 function toSnapshotModelCall(details: ReturnType<typeof toAnalysisCallDetails>): AnalysisSnapshot['modelCalls'][number] {
@@ -225,7 +227,6 @@ function toSnapshotModelCall(details: ReturnType<typeof toAnalysisCallDetails>):
     model: details.model,
     stage: details.stage,
     module: details.module,
-    tokens: details.tokens,
   }
 }
 
@@ -240,7 +241,7 @@ function evaluatePageAnalysisOutput(definition: typeof pageAnalysisModule, paylo
   }
 }
 
-function reportMindMapRepairs(context: PipelineContext, repair: { attempt: number; paths: string[] }) {
+function reportMindMapRepairs(context: AnalysisExecutionContext, repair: { attempt: number; paths: string[] }) {
   console.info('[analysis:mindmap-normalized]', JSON.stringify({ jobId: context.jobId, attempt: repair.attempt, count: repair.paths.length, paths: repair.paths }))
   safePublish(context, {
     jobId: context.jobId,
@@ -252,7 +253,7 @@ function reportMindMapRepairs(context: PipelineContext, repair: { attempt: numbe
 }
 
 function createFailedArtifact(
-  context: PipelineContext,
+  context: AnalysisExecutionContext,
   definition: typeof pageAnalysisModule,
   pagePrompt: AnalysisPromptConfig,
   attempt: number,
@@ -264,7 +265,7 @@ function createFailedArtifact(
   return {
     id: `artifact-${context.jobId}-page_analysis-${attempt}`,
     jobId: context.jobId,
-    reportVersionId: context.reportVersionId,
+    reportVersionId: context.reportId,
     moduleId: 'page_analysis',
     schemaVersion: definition.schemaVersion,
     promptVersion: artifactPromptVersion(definition, pagePrompt),
@@ -279,7 +280,7 @@ function createFailedArtifact(
 }
 
 async function checkpointCompletedAttempt(
-  context: PipelineContext,
+  context: AnalysisExecutionContext,
   facts: ReportFacts,
   accepted: Map<AnalysisModuleId, AnalysisArtifactRecord>,
   modelCalls: AnalysisSnapshot['modelCalls'],
@@ -297,7 +298,7 @@ async function checkpointCompletedAttempt(
       context.repository.checkpointAiCall({ jobId: context.jobId, details, artifact, state, snapshot })
     }, { signal: context.signal })
   } catch (error) {
-    if (shouldSettleCancelledUsage(context)) {
+    if (shouldSettleCancelledCall(context)) {
       context.repository.settleCancelledAiCall({
         jobId: context.jobId,
         details,
@@ -309,14 +310,14 @@ async function checkpointCompletedAttempt(
   }
 }
 
-function replaceModuleState(context: PipelineContext, state: AnalysisModuleState): AnalysisModuleState[] {
+function replaceModuleState(context: AnalysisExecutionContext, state: AnalysisModuleState): AnalysisModuleState[] {
   const states = context.repository.listModuleStates(context.jobId)
   const index = states.findIndex((candidate) => candidate.moduleId === state.moduleId)
   if (index < 0) return [...states, state]
   return states.map((candidate, candidateIndex) => candidateIndex === index ? state : candidate)
 }
 
-function publishPartialSnapshotEvent(context: PipelineContext) {
+function publishPartialSnapshotEvent(context: AnalysisExecutionContext) {
   safePublish(context, { jobId: context.jobId, type: 'snapshot_updated', message: '已发布部分分析快照。' })
 }
 
@@ -333,21 +334,21 @@ function toFailureErrors(code: string, error: unknown, expected: string): GateEr
   return [{ code, path: '/', message: error instanceof Error ? error.message : '模型调用失败。', expected }]
 }
 
-function publishSnapshot(context: PipelineContext, facts: ReportFacts, accepted: Map<AnalysisModuleId, AnalysisArtifactRecord>, modelCalls: AnalysisSnapshot['modelCalls']): AnalysisSnapshot {
+function publishSnapshot(context: AnalysisExecutionContext, facts: ReportFacts, accepted: Map<AnalysisModuleId, AnalysisArtifactRecord>, modelCalls: AnalysisSnapshot['modelCalls']): AnalysisSnapshot {
   const snapshot = createSnapshotWrite(context, facts, accepted, modelCalls, true)
   const publishAsCurrent = accepted.has('page_analysis')
   context.repository.publishFinalSnapshot(snapshot, determineFinalization(snapshot.moduleStates, publishAsCurrent))
   return toAnalysisSnapshot(snapshot)
 }
 
-function finalizeAnalysis(context: PipelineContext, facts: ReportFacts, accepted: Map<AnalysisModuleId, AnalysisArtifactRecord>, modelCalls: AnalysisSnapshot['modelCalls']): AnalysisSnapshot {
+function finalizeAnalysis(context: AnalysisExecutionContext, facts: ReportFacts, accepted: Map<AnalysisModuleId, AnalysisArtifactRecord>, modelCalls: AnalysisSnapshot['modelCalls']): AnalysisSnapshot {
   updateStage(context, 'quality_gate', '正在汇总并发布最终分析快照。')
   return publishSnapshot(context, facts, accepted, modelCalls)
 }
 
-function createSnapshotWrite(context: PipelineContext, facts: ReportFacts, accepted: Map<AnalysisModuleId, AnalysisArtifactRecord>, modelCalls: AnalysisSnapshot['modelCalls'], final: boolean, moduleStates = context.repository.listModuleStates(context.jobId)): AnalysisSnapshotWrite {
-  const payload = buildSnapshotPayload(context, facts, accepted)
-  return { id: `analysis-${randomUUID()}`, jobId: context.jobId, kind: final ? 'final' : 'partial', reportVersionId: context.reportVersionId, payload, artifacts: Array.from(accepted.values()), moduleStates, modelCalls, schemaVersion: payload.schemaVersion, promptVersion: 'page-analysis-prompts-v1', pipelineVersion: 'page-analysis-pipeline-v1', createdAt: now(), leaseOwner: context.leaseOwner }
+function createSnapshotWrite(context: AnalysisExecutionContext, facts: ReportFacts, accepted: Map<AnalysisModuleId, AnalysisArtifactRecord>, modelCalls: AnalysisSnapshot['modelCalls'], final: boolean, moduleStates = context.repository.listModuleStates(context.jobId)): AnalysisSnapshotWrite {
+  const payload = buildSnapshotPayload(facts, accepted)
+  return { id: `analysis-${randomUUID()}`, jobId: context.jobId, kind: final ? 'final' : 'partial', reportVersionId: context.reportId, payload, artifacts: Array.from(accepted.values()), moduleStates, modelCalls, schemaVersion: payload.schemaVersion, promptVersion: 'page-analysis-prompts-v1', pipelineVersion: 'page-analysis-pipeline-v1', createdAt: now(), leaseOwner: context.leaseOwner }
 }
 
 function toAnalysisSnapshot(snapshot: AnalysisSnapshotWrite): AnalysisSnapshot { return { id: snapshot.id, reportVersionId: snapshot.reportVersionId, schemaVersion: snapshot.schemaVersion, promptVersion: snapshot.promptVersion, pipelineVersion: snapshot.pipelineVersion, modelCalls: snapshot.modelCalls, artifacts: snapshot.artifacts, moduleStates: snapshot.moduleStates, payload: snapshot.payload, createdAt: snapshot.createdAt } }
@@ -361,30 +362,16 @@ function determineFinalization(moduleStates: AnalysisModuleState[], publishAsCur
 
 function buildReportFactsFromExtractedDocument(baseFacts: ReportFacts, extracted: { paragraphCount: number; characterCount: number }): ReportFacts { return { ...baseFacts, paragraphCount: extracted.paragraphCount, characterCount: extracted.characterCount } }
 
-function buildSnapshotPayload(context: PipelineContext, facts: ReportFacts, accepted: Map<AnalysisModuleId, AnalysisArtifactRecord>): AnalysisSnapshotPayload {
+function buildSnapshotPayload(facts: ReportFacts, accepted: Map<AnalysisModuleId, AnalysisArtifactRecord>): AnalysisSnapshotPayload {
   const basePayload = createEmptyPayload(facts)
   const page = accepted.get('page_analysis')?.payload as PageAnalysisArtifact | undefined
   if (!page) return basePayload
-  const report = context.repository.getReport(context.reportVersionId)
-  const previousPayload = report?.previousVersionId ? context.repository.getCurrentSnapshot(report.previousVersionId)?.payload : undefined
-  const previousOverall = readCompletePreviousOverall(previousPayload)
-  return { schemaVersion: ANALYSIS_SNAPSHOT_SCHEMA_VERSION, reportDetails: { sections: page['报告详情']['章节'].map((section, index) => ({ id: `section-${index + 1}`, title: section['标题'], summary: section['摘要'] })), completenessConclusion: page['报告详情']['完整度结论'] }, reportCompleteness: buildCompleteness(page), aiScore: buildAiScore(page, previousOverall), suggestions: page['AI建议'].slice(0, MAX_AI_SUGGESTIONS).map((detail, index) => ({ id: `suggestion-${index + 1}`, detail })), visualization: { mindMap: buildMindMap(page['思维导图']), wordCloud: buildVisualizationWordCloudItems(page['词云']), heatmap: { rows: page['热力图'].map((row, index) => ({ id: `heatmap-${index + 1}`, label: row['章节'], values: RESEARCH_METHODS.map((method) => row[method.label]) })) } } }
+  return { schemaVersion: ANALYSIS_SNAPSHOT_SCHEMA_VERSION, reportDetails: { sections: page['报告详情']['章节'].map((section, index) => ({ id: `section-${index + 1}`, title: section['标题'], summary: section['摘要'] })), completenessConclusion: page['报告详情']['完整度结论'] }, reportCompleteness: buildCompleteness(page), aiScore: buildAiScore(page), suggestions: page['AI建议'].slice(0, MAX_AI_SUGGESTIONS).map((detail, index) => ({ id: `suggestion-${index + 1}`, detail })), visualization: { mindMap: buildMindMap(page['思维导图']), wordCloud: buildVisualizationWordCloudItems(page['词云']), heatmap: { rows: page['热力图'].map((row, index) => ({ id: `heatmap-${index + 1}`, label: row['章节'], values: RESEARCH_METHODS.map((method) => row[method.label]) })) } } }
 }
 
-function readCompletePreviousOverall(payload: AnalysisSnapshotPayload | undefined) {
-  if (!payload || payload.schemaVersion !== ANALYSIS_SNAPSHOT_SCHEMA_VERSION) return undefined
-  const dimensions = payload.aiScore?.dimensions
-  if (!Array.isArray(dimensions) || dimensions.length !== AiScoreDimensions.length) return undefined
-  const expectedIds = new Set(AiScoreDimensions.map((dimension) => dimension.id))
-  if (dimensions.some((dimension) => !expectedIds.has(dimension.id as typeof AiScoreDimensions[number]['id']) || !Number.isFinite(dimension.score) || dimension.score < 0 || dimension.score > 100)) return undefined
-  return Number.isFinite(payload.aiScore.overall) && payload.aiScore.overall >= 0 && payload.aiScore.overall <= 100
-    ? payload.aiScore.overall
-    : undefined
-}
-
-function buildAiScore(page: PageAnalysisArtifact, previousOverall: number | undefined): AiScore {
+function buildAiScore(page: PageAnalysisArtifact): AiScore {
   const dimensions = AiScoreDimensions.map((dimension) => ({ id: dimension.id, label: dimension.label, score: page['综合评分'][dimension.id] }))
-  return { overall: averageScores(dimensions.map((dimension) => dimension.score)), previousOverall, summary: page['综合评分']['主要影响因素'], dimensions }
+  return { overall: averageScores(dimensions.map((dimension) => dimension.score)), summary: page['综合评分']['主要影响因素'], dimensions }
 }
 
 function buildCompleteness(page: PageAnalysisArtifact): ReportCompletenessArtifact {
@@ -414,16 +401,16 @@ function completePageWordCloudPayload(payload: unknown, documentText: string): u
   return { ...payload, '词云': completed.words }
 }
 
-function saveModuleState(context: PipelineContext, state: AnalysisModuleState) { context.repository.saveModuleState(context.jobId, state) }
+function saveModuleState(context: AnalysisExecutionContext, state: AnalysisModuleState) { context.repository.saveModuleState(context.jobId, state) }
 
-function updateStage(context: PipelineContext, stage: AnalysisStage, message: string) {
+function updateStage(context: AnalysisExecutionContext, stage: AnalysisStage, message: string) {
   throwIfCancelled(context)
   const updated = context.repository.updateJob(context.jobId, { status: 'running', stage, stageIndex: AnalysisStages.indexOf(stage) })
   if (!updated) throw new Error('任务租约已失效，不能更新分析阶段。')
   safePublish(context, { jobId: context.jobId, type: 'stage', stage, message })
 }
 
-function throwIfCancelled(context: PipelineContext) { if (context.signal?.aborted || context.repository.isCancellationRequested(context.jobId)) throw new Error('Analysis cancelled') }
+function throwIfCancelled(context: AnalysisExecutionContext) { if (context.signal?.aborted || context.repository.isCancellationRequested(context.jobId)) throw new Error('Analysis cancelled') }
 
 function getPromptConfig(settings: ReadonlyMap<AnalysisTrackedModuleId, AnalysisPromptConfig>, target: AnalysisTrackedModuleId) { const prompt = settings.get(target); if (!prompt) throw new Error(`缺少 ${target} 模块的提示词配置。`); return prompt }
 
@@ -441,7 +428,7 @@ export async function retryDelay(attempt: number, retryAfterMs = 0, signal?: Abo
   })
 }
 
-function safePublish(context: PipelineContext, input: Parameters<AnalysisEventPublisher['publish']>[0]) {
+function safePublish(context: AnalysisExecutionContext, input: Parameters<AnalysisEventPublisher['publish']>[0]) {
   try {
     context.publisher.publish(input)
   } catch (error) {
@@ -450,16 +437,15 @@ function safePublish(context: PipelineContext, input: Parameters<AnalysisEventPu
   }
 }
 
-function billedDetailsFromError(error: unknown, attempt: number) {
-  const billed = completedCallFromError(error)
-  if (!billed) return undefined
+function completedDetailsFromError(error: unknown, attempt: number) {
+  const completed = completedCallFromError(error)
+  if (!completed) return undefined
   return {
-    provider: billed.provider,
-    model: billed.model,
+    provider: completed.provider,
+    model: completed.model,
     module: 'page_analysis' as const,
     stage: 'page_analysis' as const,
     attempt,
-    tokens: billed.tokens,
   }
 }
 
@@ -475,10 +461,29 @@ function toFailedSettlementArtifact(artifact: AnalysisArtifactRecord): AnalysisA
   }
 }
 
-function shouldSettleCancelledUsage(context: PipelineContext) {
+function shouldSettleCancelledCall(context: AnalysisExecutionContext) {
   const job = context.repository.getJob(context.jobId)
   return Boolean(job && (job.status === 'cancelled' || job.cancelRequested))
+}
 
+function isLostLease(error: unknown) {
+  if (error instanceof AnalysisLeaseLostError) return true
+  return Boolean(error && typeof error === 'object' && 'code' in error && (error as { code: unknown }).code === 'TASK_LEASE_LOST')
+}
+
+function settleCompletedCall(
+  context: AnalysisExecutionContext,
+  details: AnalysisCallCheckpoint['details'],
+  artifact: AnalysisArtifactRecord,
+) {
+  try {
+    context.repository.settleCancelledAiCall({ jobId: context.jobId, details, artifact })
+  } catch (error) {
+    const code = error && typeof error === 'object' && 'code' in error ? String((error as { code: unknown }).code) : ''
+    if (code === 'CALL_NOT_FOUND' || code === 'CALL_ALREADY_COMPLETED' || code === 'INVALID_CALL_STATE') return
+    if (isLostLease(error)) return
+    throw error
+  }
 }
 
 function now() { return new Date().toISOString() }

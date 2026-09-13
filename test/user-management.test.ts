@@ -8,7 +8,8 @@ const directory = await mkdtemp(`${tmpdir()}/yanxing-user-management-`)
 process.env.YANXING_DATABASE_PATH = path.join(directory, 'user-management-test.sqlite')
 
 const { authenticateUserAsync, createOrUpdateUser, createSession, getManagedUserById, sessionCookieName, updateManagedUser } = await import('../lib/auth/session')
-const { createProjectForUser, listProjectsForUser } = await import('../lib/db/repository')
+const {createNativeProject}=await import('./helpers/native-project')
+const {getDatabase}=await import('../lib/db/client')
 const { GET: listUsers, POST: createUser } = await import('../app/api/admin/users/route')
 const { DELETE: deleteUser, PATCH: updateUser } = await import('../app/api/admin/users/[userId]/route')
 
@@ -148,7 +149,7 @@ test('administrators can delete users while preserving account and project safeg
   assert.equal(afterDeletionBody.users.some((user) => user.id === target.id), false)
 
   const soleOwner = createOrUpdateUser({ username: 'sole-owner', displayName: '唯一负责人', password: 'sole-owner-123', role: 'researcher' })
-  createProjectForUser({ title: '唯一负责人课题', objective: '', description: '', ownerName: soleOwner.displayName }, soleOwner.id)
+  createNativeProject({database:getDatabase(),ownerId:soleOwner.id,title:'唯一负责人课题'})
   const ownerDeletion = await deleteRequest(adminSession.token, soleOwner.id)
   assert.equal(ownerDeletion.status, 400)
   assert.match((await ownerDeletion.json() as { error?: string }).error ?? '', /唯一负责人/)
@@ -156,16 +157,11 @@ test('administrators can delete users while preserving account and project safeg
 
   const departingCollaborator = createOrUpdateUser({ username: 'departing-collaborator', displayName: '待移除协作者', password: 'departing-collaborator-123', role: 'researcher' })
   const survivingOwner = createOrUpdateUser({ username: 'surviving-owner', displayName: '保留负责人', password: 'surviving-owner-123', role: 'researcher' })
-  const sharedProject = createProjectForUser({
-    title: '含协作者课题',
-    objective: '',
-    description: '',
-    ownerName: survivingOwner.displayName,
-  }, survivingOwner.id, survivingOwner.id, [departingCollaborator.id])
+  const sharedProject=createNativeProject({database:getDatabase(),ownerId:survivingOwner.id,title:'含协作者课题',collaboratorIds:[departingCollaborator.id]})
   const collaboratorDeletion = await deleteRequest(adminSession.token, departingCollaborator.id)
   assert.equal(collaboratorDeletion.status, 200)
-  const survivingProject = listProjectsForUser(survivingOwner).find((project) => project.id === sharedProject.id)
-  assert.equal(survivingProject?.ownerName, survivingOwner.displayName)
+  const survivingProject=getDatabase().prepare('SELECT owner_name FROM projects WHERE id=?').get(sharedProject.id)
+  assert.equal(survivingProject?.owner_name,survivingOwner.displayName)
 })
 
 test('users can update their own profile including displayName and avatar', async () => {

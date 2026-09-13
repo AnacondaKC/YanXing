@@ -9,7 +9,7 @@ import { AnalysisResultHint } from '@/components/analysis-result-hint'
 import { WorkbenchCardDecoration } from '@/components/ui/card-decoration'
 import { useDialogFocus } from '@/components/use-dialog-focus'
 import { isAnalysisResultScanning, isAnalysisResultVisible, resolveAnalysisResultDisplay, type AnalysisResultDisplay } from '@/modules/analysis/progress'
-import { getMindMapDirection, getMindMapNodeGeometry, getNodeDisplayLabel, getRootLabelLines, ROOT_LINE_HEIGHT, type MindMapDirection } from '@/lib/rendering/graph-layout'
+import { fitMindMapToViewport, getMindMapDirection, getMindMapNodeGeometry, getNodeDisplayLabel, getRootLabelLines, ROOT_LINE_HEIGHT, type MindMapDirection } from '@/lib/rendering/graph-layout'
 import { createWordCloudLayout, WORD_CLOUD_LAYOUT_SCALES, type WordCloudRenderWord } from '@/lib/rendering/word-cloud-layout'
 import { getVisualizationData, type HeatmapData, type WordCloudItem } from '@/lib/rendering/visualizations'
 import { MIN_WORD_CLOUD_KEYWORDS, RESEARCH_METHODS } from '@/modules/contracts/analysis'
@@ -323,8 +323,11 @@ function MindMapCanvas({
   const MAX_ZOOM = isExpanded ? 6 : 4
   const maxZoomRef = useRef(MAX_ZOOM)
   maxZoomRef.current = MAX_ZOOM
+  // 用户滚轮缩放或拖动后停止自动适配，避免抢走视图控制权
+  const userAdjustedRef = useRef(false)
 
   function applyPan(nextPan: { x: number; y: number }) {
+    userAdjustedRef.current = true
     panRef.current = nextPan
     if (contentRef.current) {
       contentRef.current.style.transform = `translate(${nextPan.x}px, ${nextPan.y}px)`
@@ -377,33 +380,26 @@ function MindMapCanvas({
   }, [tree, direction, isHorizontal])
   const treeLinks = useMemo(() => tree.links(), [tree])
 
-  const autoFitRef = useRef(false)
   useEffect(() => {
-    autoFitRef.current = false
+    userAdjustedRef.current = false
     const viewport = viewportRef.current
     if (!viewport) return
 
     const fitToViewport = () => {
-      if (autoFitRef.current || viewport.clientWidth <= 0 || viewport.clientHeight <= 0 || viewBoxHeight <= 0) return
-      // 上下保留 8px 微呼吸边距，让高度 100% 饱满填满垂直空间，上下边距完全均等对称
-      const fitPaddingH = 8
-      const availableH = Math.max(1, viewport.clientHeight - fitPaddingH)
+      if (userAdjustedRef.current || viewport.clientWidth <= 0 || viewport.clientHeight <= 0 || viewBoxWidth <= 0 || viewBoxHeight <= 0) return
+      // 整张导图等比缩放至画布内：宽高各留 8px 呼吸边距，取较小缩放比，保证完整可见且尽量大
+      const { zoom: fittedZoom, panX, panY } = fitMindMapToViewport({
+        viewportWidth: viewport.clientWidth,
+        viewportHeight: viewport.clientHeight,
+        viewBoxWidth,
+        viewBoxHeight,
+        minZoom: MIN_ZOOM,
+        maxZoom: MAX_ZOOM,
+        padding: 8,
+      })
 
-      const fitZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, availableH / viewBoxHeight))
-      const fittedZoom = Number(fitZoom.toFixed(2))
-      const contentW = viewBoxWidth * fittedZoom
-      const contentH = viewBoxHeight * fittedZoom
-
-      autoFitRef.current = true
       zoomRef.current = fittedZoom
       onZoomChange(fittedZoom)
-
-      const panY = (viewport.clientHeight - contentH) / 2
-      let panX = (viewport.clientWidth - contentW) / 2
-
-      if (isHorizontal && contentW > viewport.clientWidth - 16) {
-        panX = 8
-      }
 
       const nextPan = { x: panX, y: panY }
       panRef.current = nextPan
@@ -412,10 +408,11 @@ function MindMapCanvas({
 
     fitToViewport()
     if (typeof ResizeObserver === 'undefined') return
+    // 画布尺寸变化（窗口缩放、侧栏折叠、进入/退出全屏）时重新适配，直到用户自己缩放或拖动
     const observer = new ResizeObserver(fitToViewport)
     observer.observe(viewport)
     return () => observer.disconnect()
-  }, [isExpanded, viewBoxWidth, viewBoxHeight, direction, onZoomChange, isHorizontal])
+  }, [isExpanded, viewBoxWidth, viewBoxHeight, direction, onZoomChange])
 
   useEffect(() => {
     const viewport = viewportRef.current

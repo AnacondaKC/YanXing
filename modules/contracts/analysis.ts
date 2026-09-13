@@ -148,7 +148,6 @@ export interface AiScoreDimension {
 
 export interface AiScore {
   overall: number
-  previousOverall?: number
   summary: string
   dimensions: AiScoreDimension[]
 }

@@ -11,7 +11,6 @@ const tsconfigPath = path.join(projectRoot, 'tsconfig.source.json')
 const tsxCliPath = fileURLToPath(import.meta.resolve('tsx/cli'))
 const forwardedSignals = ['SIGHUP', 'SIGINT', 'SIGTERM']
 const testFilePattern = /\.test\.(?:mjs|ts)$/
-
 const systemDependencies = {
   createWorkspace: async () => {
     const workspaceRoot = await mkdtemp(path.join(tmpdir(), 'yanxing-tests-'))
@@ -24,14 +23,13 @@ const systemDependencies = {
   removeWorkspace: (workspaceRoot) => rm(workspaceRoot, { recursive: true, force: true }),
   spawnProcess: spawn,
   signalSource: process,
+  defaultTestFiles,
 }
 
-export async function createTestInvocation({ workspaceRoot, arguments_: extraArguments = [], environment = process.env }) {
-  const { nodeArguments, selectedTestFiles } = await resolveTestArguments(extraArguments)
-  const testFiles = selectedTestFiles.length > 0 ? selectedTestFiles : await defaultTestFiles()
+function childEnvironment(environment, workspaceRoot) {
   const storageRoot = path.join(workspaceRoot, 'storage')
   const temporaryRoot = path.join(workspaceRoot, 'tmp')
-  const childEnvironment = {
+  const environmentForChild = {
     ...environment,
     NODE_ENV: 'test',
     TEMP: temporaryRoot,
@@ -44,18 +42,8 @@ export async function createTestInvocation({ workspaceRoot, arguments_: extraArg
   }
   // A runner self-test can invoke this command from inside node:test. The nested
   // child must bootstrap as a fresh test runner instead of inheriting its parent role.
-  delete childEnvironment.NODE_TEST_CONTEXT
-
-  return {
-    command: process.execPath,
-    arguments: [tsxCliPath, '--tsconfig', tsconfigPath, '--test', ...nodeArguments, ...testFiles],
-    options: {
-      cwd: workspaceRoot,
-      env: childEnvironment,
-      shell: false,
-      stdio: 'inherit',
-    },
-  }
+  delete environmentForChild.NODE_TEST_CONTEXT
+  return environmentForChild
 }
 
 export async function runTestCommand({ arguments_: extraArguments = process.argv.slice(2), environment = process.env, dependencies: dependencyOverrides = {} } = {}) {
@@ -64,11 +52,27 @@ export async function runTestCommand({ arguments_: extraArguments = process.argv
   let signalForwarding
 
   try {
-    const invocation = await createTestInvocation({ workspaceRoot, arguments_: extraArguments, environment })
-    const child = dependencies.spawnProcess(invocation.command, invocation.arguments, invocation.options)
+    const { nodeArguments, selectedTestFiles } = await resolveTestArguments(extraArguments)
+    const testFiles = selectedTestFiles.length > 0 ? selectedTestFiles : await dependencies.defaultTestFiles()
+    if (testFiles.length === 0) return { code: 0, signal: undefined }
+    const child = dependencies.spawnProcess(process.execPath, [
+      tsxCliPath,
+      '--tsconfig',
+      tsconfigPath,
+      '--test',
+      ...nodeArguments,
+      ...testFiles,
+    ], {
+      cwd: workspaceRoot,
+      env: childEnvironment(environment, workspaceRoot),
+      shell: false,
+      stdio: 'inherit',
+    })
     signalForwarding = forwardSignals(child, dependencies.signalSource)
-    const outcome = await waitForChild(child)
-    return { code: outcome.code, signal: outcome.signal ?? signalForwarding.signal }
+    const current = await waitForChild(child)
+    const signal = current.signal ?? signalForwarding.signal
+    if (signal) return { code: current.code, signal }
+    return { code: current.code || 0, signal: undefined }
   } finally {
     signalForwarding?.dispose()
     await dependencies.removeWorkspace(workspaceRoot)

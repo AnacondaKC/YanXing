@@ -1,5 +1,11 @@
-import type { AnalysisJob } from '@/modules/analysis/domain'
 import type { AnalysisJobStatus, AnalysisModuleState, AnalysisModuleStatus, AnalysisStage, AnalysisTrackedModuleId } from '@/modules/contracts/analysis'
+
+export type AnalysisProgressJob = {
+  status: AnalysisJobStatus
+  stage: AnalysisStage
+  stageIndex: number
+  errorMessage?: string
+}
 
 interface AnalysisProgressStep {
   stage: AnalysisStage
@@ -26,10 +32,10 @@ export interface AnalysisProgressView {
 
 export type AnalysisResultDisplay = 'empty' | 'scanning' | 'ready' | 'updating' | 'stale' | 'failed' | 'cancelled'
 
-const PUBLISHED_JOB_STATUSES = new Set<AnalysisJob['status']>(['completed'])
+const PUBLISHED_JOB_STATUSES = new Set<AnalysisJobStatus>(['completed'])
 const GENERATING_MODULE_STATUSES = new Set<AnalysisModuleStatus>(['running', 'retrying'])
 
-export function buildAnalysisProgress(input: { job?: AnalysisJob; moduleStates?: AnalysisModuleState[] }): AnalysisProgressView {
+export function buildAnalysisProgress(input: { job?: AnalysisProgressJob; moduleStates?: AnalysisModuleState[] }): AnalysisProgressView {
   const currentJob = input.job
   const moduleStates = new Map((input.moduleStates ?? []).map((state) => [state.moduleId, state]))
   const waiting = !currentJob || currentJob.status === 'queued'
@@ -77,14 +83,14 @@ export function isAnalysisResultVisible(display: AnalysisResultDisplay) {
   return display === 'ready' || display === 'updating' || display === 'stale'
 }
 
-function resolveActiveStepIndex(job: AnalysisJob, moduleStatus: AnalysisModuleStatus | undefined) {
+function resolveActiveStepIndex(job: AnalysisProgressJob, moduleStatus: AnalysisModuleStatus | undefined) {
   if (job.stage === 'validating') return 0
   if (job.stage === 'page_analysis') return moduleStatus === 'gating' ? 2 : 1
   if (job.stage === 'quality_gate' || job.stage === 'completed') return 3
   return 0
 }
 
-function resolveNodeState(moduleId: AnalysisTrackedModuleId | undefined, index: number, activeStepIndex: number, job: AnalysisJob | undefined, moduleStates: Map<AnalysisTrackedModuleId, AnalysisModuleState>): AnalysisProgressNodeState {
+function resolveNodeState(moduleId: AnalysisTrackedModuleId | undefined, index: number, activeStepIndex: number, job: AnalysisProgressJob | undefined, moduleStates: Map<AnalysisTrackedModuleId, AnalysisModuleState>): AnalysisProgressNodeState {
   const jobStatus = job?.status
   const moduleStatus = moduleId ? moduleStates.get(moduleId)?.status : undefined
   if (moduleStatus === 'accepted' || moduleStatus === 'gating') return 'completed'
@@ -104,7 +110,7 @@ function resolveNodeState(moduleId: AnalysisTrackedModuleId | undefined, index: 
   return 'pending'
 }
 
-function progressTitle(job: AnalysisJob | undefined, module: AnalysisModuleState | undefined, activeStepIndex: number) {
+function progressTitle(job: AnalysisProgressJob | undefined, module: AnalysisModuleState | undefined, activeStepIndex: number) {
   if (!job) return '正在同步分析进度'
   if (job.status === 'queued') return '正在准备开始分析'
   if (job.status === 'completed') return '分析结果已发布'
@@ -117,7 +123,7 @@ function progressTitle(job: AnalysisJob | undefined, module: AnalysisModuleState
   return '正在' + step.label
 }
 
-function progressDetail(job: AnalysisJob | undefined, module: AnalysisModuleState | undefined) {
+function progressDetail(job: AnalysisProgressJob | undefined, module: AnalysisModuleState | undefined) {
   if (!job) return undefined
   if (job.status === 'queued') return '已进入队列，稍后自动开始'
   if (job.status === 'failed') {

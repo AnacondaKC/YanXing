@@ -299,8 +299,13 @@ function isManagedLogArchive(name) {
   return /^(?:web|worker)\.log\.\d{8}T\d{9}Z(?:-\d+)?$/.test(name)
 }
 
+export function resolveManagedTempDirectory({ cwd, databasePath }) {
+  const database = path.resolve(cwd, databasePath?.trim() || 'storage/yanxing.sqlite')
+  return path.join(path.dirname(database), 'tmp')
+}
+
 function purgeExpiredTempEntries() {
-  const tempDirectory = path.join(storageDirectory, 'tmp')
+  const tempDirectory = resolveManagedTempDirectory({ cwd: projectRoot, databasePath: process.env.YANXING_DATABASE_PATH })
   if (!existsSync(tempDirectory)) return
   const cutoff = Date.now() - tempRetentionDays * 24 * 60 * 60 * 1000
   purgeExpiredEntries(tempDirectory, cutoff)
@@ -712,10 +717,6 @@ function acquireLock() {
       throw new Error('无法创建启动管理锁：' + (retryError instanceof Error ? retryError.message : String(retryError)))
     }
   }
-}
-
-function readLockIdentity() {
-  return readPathLockIdentity(lockPath)
 }
 
 function reclaimStaleLock() {

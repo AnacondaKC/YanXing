@@ -25,8 +25,9 @@ const RADAR_CENTER = 150
 const RADAR_GRID_RADIUS = 110
 const COMPLETENESS_BAR_CYCLE_MS = 2400
 
-export function AiScoreCard({ score, analyzing, jobStatus, className }: {
+export function AiScoreCard({ score, scoreDelta, analyzing, jobStatus, className }: {
   score: AiScore
+  scoreDelta?: number
   analyzing?: boolean
   jobStatus?: AnalysisJobStatus
   className?: string
@@ -37,7 +38,7 @@ export function AiScoreCard({ score, analyzing, jobStatus, className }: {
   const showScore = isAnalysisResultVisible(display)
   const displayDimensions = hasDimensions ? score.dimensions : DEFAULT_SCORE_DIMENSIONS
   const scores = displayDimensions.map((dimension) => dimension.score)
-  const trend = score.previousOverall === undefined ? 0 : score.overall - score.previousOverall
+  const trend = scoreDelta
 
   return (
     <div className={`yx-dashboard-card relative overflow-hidden flex flex-col min-h-0 !py-[20px] !px-[25px] ${className ?? ''}`}>
@@ -53,7 +54,7 @@ export function AiScoreCard({ score, analyzing, jobStatus, className }: {
         </div>
         <div className="flex items-center gap-1.5 self-center text-[9px] font-medium sm:text-[10px]">
           <AnalysisResultHint display={display} />
-          {showScore && display === 'ready' ? (
+          {showScore && display === 'ready' && trend !== undefined ? (
             <span className={trend > 0 ? 'text-yx-brand' : trend < 0 ? 'text-yx-warning' : 'text-yx-faint'}>
               {trend > 0 ? '↑ ' + trend + ' 分' : trend < 0 ? '↓ ' + Math.abs(trend) + ' 分' : '0 分'} · 较上一版
             </span>

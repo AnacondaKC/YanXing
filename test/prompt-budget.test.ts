@@ -73,7 +73,7 @@ test('old frozen prompts fail before network or billing callbacks without mutati
     assert.match(error.message, /至少需要.*上限为 8000/)
     return true
   })
-  await assert.rejects(() => runReportInsightAgent({ promptConfig: { ...frozen, target: 'report_insight', systemPrompt: '研'.repeat(8_000) }, file: { path: '/nonexistent-document-must-not-be-read' }, runtime }), PromptBudgetError)
+  await assert.rejects(() => runReportInsightAgent({ promptConfig: { ...frozen, target: 'report_insight', systemPrompt: '研'.repeat(8_000) }, documentText: '报告正文', runtime, onCallStarted: () => { started += 1 } }), PromptBudgetError)
   assert.equal(fetchMock.mock.calls.length, 0)
   assert.equal(started, 0)
   assert.deepEqual(frozen, original)

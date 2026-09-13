@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 
-export type SettingsRevisionScope = 'models' | 'prompts' | 'budget' | 'branding'
+export type SettingsRevisionScope = 'models' | 'prompts' | 'branding'
 
 export interface SettingsRevisionCondition {
   revision: number

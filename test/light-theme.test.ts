@@ -6,7 +6,6 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { ReportDocumentViewer } from '../components/report-document-viewer'
 import { TopbarUserNav } from '../components/workspace-user-nav'
 import { renderInsightDocument } from '../lib/rendering/markdown'
-import type { ReportVersion } from '../modules/reports/domain'
 
 test('root layout no longer reads persisted or system theme preferences', () => {
   const layout = readFileSync(new URL('../app/layout.tsx', import.meta.url), 'utf8')
@@ -33,13 +32,9 @@ test('topbar keeps account controls without a theme switch', () => {
 })
 
 test('DOCX frame has a fixed light scheme and standalone background fallback', () => {
-  const report: ReportVersion = {
-    id: 'report-light', projectId: 'project-light', version: 1, title: '浅色阅读',
-    fileName: 'report.docx', fileHash: 'light-document-hash', paragraphCount: 1,
-    characterCount: 10, parseStatus: 'ready', createdAt: '2026-08-01T00:00:00Z',
-    sourceUpdatedAt: '2026-08-01T00:00:00Z',
-  }
-  const html = renderToStaticMarkup(createElement(ReportDocumentViewer, { report }))
+  const html = renderToStaticMarkup(createElement(ReportDocumentViewer, {
+    report: { id: 'report-light', title: '浅色阅读', fileName: 'report.docx' },
+  }))
   assert.match(html, /srcDoc=/)
   assert.match(html, /color-scheme: only light;/)
   assert.match(html, /var\(--yx-hover, #efedea\)/)

@@ -4,9 +4,8 @@ import {
   type ChatCompletionsStructuredJsonResult,
   type ChatCompletionsTextInput,
   type ChatCompletionsTextResult,
-  type ChatCompletionsUsage,
 } from '@/lib/ai/runtime/chat-completions'
-import { ChatCompletionsError, ModelProviderError, withCompletedUsage } from '@/lib/ai/runtime/errors'
+import { ChatCompletionsError, ModelProviderError, withCompletedCall } from '@/lib/ai/runtime/errors'
 import { httpErrorMessage, requestJson } from '@/lib/ai/runtime/http'
 import {
   buildStructuredPrompt,
@@ -62,9 +61,9 @@ export async function runStructuredJson(input: ChatCompletionsStructuredJsonInpu
     outputLabel: input.output.name + ' JSON',
   }, 'json')
   try {
-    return { value: parseJsonContent(result.content, input.output.name), usage: result.usage }
+    return { value: parseJsonContent(result.content, input.output.name) }
   } catch (error) {
-    withCompletedUsage(error, result.usage, { provider: input.model.provider, model: input.model.id })
+    withCompletedCall(error, { provider: input.model.provider, model: input.model.id })
   }
 }
 
@@ -108,11 +107,10 @@ async function requestChatCompletion(input: ChatCompletionsTextInput, callType: 
         { code: providerErrorCode(result.value, result.status) },
       )
     }
-    const usage = getUsage(result.value)
     try {
-      return { content: getMessageContent(result.value, input.outputLabel, callType), usage }
+      return { content: getMessageContent(result.value, input.outputLabel, callType) }
     } catch (error) {
-      withCompletedUsage(error, usage, { provider: input.model.provider, model: input.model.id })
+      withCompletedCall(error, { provider: input.model.provider, model: input.model.id })
     }
   } catch (error) {
     if (error instanceof ChatCompletionsError) throw error
@@ -150,7 +148,7 @@ function getMessageContent(payload: Record<string, unknown>, outputLabel: string
       : ''
   if (content.trim()) return content
   if ((typeof message.reasoning_content === 'string' && message.reasoning_content.trim()) || (typeof message.reasoning === 'string' && message.reasoning.trim())) {
-    throw new ChatCompletionsError('模型只返回了 reasoning，未返回' + outputLabel + '；请提高最大输出预算或降低推理强度。', undefined, undefined, { code: 'reasoning_only', retryable: false })
+    throw new ChatCompletionsError('模型只返回了 reasoning，未返回' + outputLabel + '；请提高模型最大输出长度或降低推理强度。', undefined, undefined, { code: 'reasoning_only', retryable: false })
   }
   const isStructuredOutput = callType === 'json'
   const code = isStructuredOutput ? 'empty_json_content' : 'empty_content'
@@ -188,28 +186,4 @@ function providerErrorCode(payload: Record<string, unknown>, status: number) {
   if (status === 402) return 'payment_required'
   if (status === 400 || status === 422) return 'invalid_request'
   return undefined
-}
-
-function getUsage(payload: Record<string, unknown>): ChatCompletionsUsage {
-  const usage = payload.usage && typeof payload.usage === 'object' ? payload.usage as Record<string, unknown> : {}
-  const inputTokens = tokenValue(usage.prompt_tokens) ?? tokenValue(usage.input_tokens)
-  const outputTokens = tokenValue(usage.completion_tokens) ?? tokenValue(usage.output_tokens)
-  const reportedTotalTokens = tokenValue(usage.total_tokens)
-  const details = usage.completion_tokens_details && typeof usage.completion_tokens_details === 'object'
-    ? usage.completion_tokens_details as Record<string, unknown>
-    : {}
-  return {
-    inputTokens: inputTokens ?? 0,
-    outputTokens: outputTokens ?? 0,
-    totalTokens: reportedTotalTokens ?? (inputTokens ?? 0) + (outputTokens ?? 0),
-    usageComplete: inputTokens !== undefined && outputTokens !== undefined
-      && (usage.total_tokens === undefined || reportedTotalTokens !== undefined),
-    cacheHitTokens: tokenValue(usage.prompt_cache_hit_tokens) ?? 0,
-    cacheMissTokens: tokenValue(usage.prompt_cache_miss_tokens) ?? 0,
-    reasoningTokens: tokenValue(details.reasoning_tokens) ?? 0,
-  }
-}
-
-function tokenValue(value: unknown) {
-  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined
 }

@@ -1,4 +1,4 @@
-import { deflateRawSync } from 'node:zlib'
+import { crc32, deflateRawSync } from 'node:zlib'
 
 export const PDF_MIME_TYPE = 'application/pdf'
 export const DOCX_MIME_TYPE = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
@@ -36,6 +36,16 @@ export function createMinimalDocxBuffer(text = 'Hello DOCX world') {
   ])
 }
 
+export function createPreviewableDocxBuffer(text = 'Hello DOCX world') {
+  const contentTypes = contentTypesXml().replace('<Default Extension="xml"', '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml"')
+  return createStoredZip([
+    {name:'[Content_Types].xml',content:contentTypes},
+    {name:'_rels/.rels',content:'<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>'},
+    {name:'word/_rels/document.xml.rels',content:'<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>'},
+    {name:'word/document.xml',content:'<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>'+escapeXml(text)+'</w:t></w:r></w:p><w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr></w:body></w:document>'},
+  ])
+}
+
 function escapePdfText(text) {
   return text.replace(/[\\()]/g, (character) => `\\${character}`)
 }
@@ -70,7 +80,7 @@ function createStoredZip(entries) {
     local.writeUInt16LE(20, 4)
     local.writeUInt16LE(0, 6)
     local.writeUInt16LE(method, 8)
-    local.writeUInt32LE(0, 14)
+    local.writeUInt32LE(crc32(raw), 14)
     local.writeUInt32LE(content.length, 18)
     local.writeUInt32LE(raw.length, 22)
     local.writeUInt16LE(name.length, 26)
@@ -83,7 +93,7 @@ function createStoredZip(entries) {
     central.writeUInt16LE(20, 6)
     central.writeUInt16LE(0, 8)
     central.writeUInt16LE(method, 10)
-    central.writeUInt32LE(0, 16)
+    central.writeUInt32LE(crc32(raw), 16)
     central.writeUInt32LE(content.length, 20)
     central.writeUInt32LE(raw.length, 24)
     central.writeUInt16LE(name.length, 28)

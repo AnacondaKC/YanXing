@@ -8,7 +8,7 @@ import {
   DEFAULT_MAX_OUTPUT_TOKENS,
 } from '../lib/ai/runtime-options'
 import { seedInitialAiSettings } from '../lib/db/initial-ai-settings'
-import { databaseMigrations } from '../lib/db/migrations'
+import { installFreshSharedSchema } from '../lib/db/native-schema'
 
 const OUTPUT_TOKEN_ENV = 'YANXING_MODEL_MAX_OUTPUT_TOKENS'
 const EXPLICIT_MAX_OUTPUT_TOKENS = 32_768
@@ -37,11 +37,8 @@ function createIsolatedDatabase(context: TestContext) {
   const database = new DatabaseSync(':memory:')
   context.after(() => database.close())
   database.exec('PRAGMA foreign_keys = ON;')
-  runInImmediateTransaction(database, () => {
-    for (const migration of databaseMigrations) {
-      migration.apply(database)
-    }
-  })
+  installFreshSharedSchema(database)
+  runInImmediateTransaction(database, () => seedInitialAiSettings(database))
   return database
 }
 

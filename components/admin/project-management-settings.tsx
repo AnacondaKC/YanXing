@@ -7,15 +7,27 @@ import { IconBadge } from '@/components/ui/icon-badge'
 import { Dialog, DialogHeader } from '@/components/ui/dialog'
 import { FormError } from '@/components/ui/field'
 import { apiFetch, fetchAllPages, mutationHeaders } from '@/lib/client-request'
-import type { ProjectWithCapabilities } from '@/modules/projects/domain'
+export type ManagedProject = {
+  id: string
+  title: string
+  ownerId: string
+  ownerName: string
+  objective?: string
+  description?: string
+  collaboratorNames?: string
+  isExample?: boolean
+  canManage?: boolean
+  canDelete?: boolean
+  updatedAt?: string
+}
 import type { ManagedUser } from '@/modules/users/domain'
 
 type ManagedProjectRole = 'owner' | 'editor'
 type ManagedProjectMember = { userId: string; username: string; displayName: string; role: ManagedProjectRole; status: 'active' | 'disabled' }
 
 const projectRoleSegments: Array<{ value: ManagedProjectRole; label: string; title: string }> = [
-  { value: 'owner', label: '负责人', title: '可管理并删除课题；每个课题仅一名负责人' },
-  { value: 'editor', label: '协作者', title: '可编辑课题和处理报告，每个课题最多 3 名' },
+  { value: 'owner', label: '负责人', title: '可管理课题与研究提交；每个课题仅一名负责人' },
+  { value: 'editor', label: '协作者', title: '参与课题协作；课题和报告写入仅限负责人或管理员，最多 3 名' },
 ]
 
 export function ProjectManagementSettings({
@@ -26,14 +38,14 @@ export function ProjectManagementSettings({
   onDeleteProject,
   onMembersChanged,
 }: {
-  projects: ProjectWithCapabilities[]
+  projects: ManagedProject[]
   hiddenProjectIds?: string[]
   onToggleHideProject?: (projectId: string) => void
-  onEditProject?: (project: ProjectWithCapabilities) => void
-  onDeleteProject: (project: ProjectWithCapabilities) => void
+  onEditProject?: (project: ManagedProject) => void
+  onDeleteProject?: (project: ManagedProject) => void
   onMembersChanged: () => void
 }) {
-  const [memberTarget, setMemberTarget] = useState<ProjectWithCapabilities>()
+  const [memberTarget, setMemberTarget] = useState<ManagedProject>()
   const [searchQuery, setSearchQuery] = useState('')
 
   const filteredProjects = useMemo(() => {
@@ -145,7 +157,7 @@ export function ProjectManagementSettings({
                       </>
                     )}
                     <span className="shrink-0 text-yx-faint">·</span>
-                    <span className="shrink-0 font-mono tabular-nums">更新于 {project.updatedAt.slice(0, 10)}</span>
+                    {project.updatedAt ? <span className="shrink-0 font-mono tabular-nums">更新于 {project.updatedAt.slice(0, 10)}</span> : null}
                   </div>
                 </div>
                 <div className="flex shrink-0 items-center gap-1.5">
@@ -192,7 +204,7 @@ export function ProjectManagementSettings({
                         <span>{isHidden ? '显示' : '隐藏'}</span>
                       </button>
                     )
-                  ) : project.canDelete ? (
+                  ) : project.canDelete && onDeleteProject ? (
                     <button
                       type="button"
                       onClick={() => onDeleteProject(project)}
@@ -239,7 +251,7 @@ export function ProjectMembersDialog({
   onClose,
   onSaved,
 }: {
-  project: ProjectWithCapabilities
+  project: ManagedProject
   onClose: () => void
   onSaved: () => void
 }) {

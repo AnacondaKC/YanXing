@@ -21,21 +21,46 @@ const DEFAULT_BASE_URL = 'http://127.0.0.1:3000'
 const DEFAULT_USERNAME = 'admin'
 const DEFAULT_MODEL_HOST = '127.0.0.1'
 const MANIFEST_VERSION = 1
-const TERMINAL_JOB_STATUSES = new Set(['completed', 'failed', 'cancelled'])
+const TERMINAL_TASK_STATUSES = new Set(['completed', 'failed', 'cancelled'])
+const NATIVE_AI_FAILURE_CODES = new Set([
+  'MODEL_EXECUTION_FAILED',
+  'QUALITY_GATE_FAILED',
+  'WORKER_EXECUTION_FAILED',
+  'AI_CALL_INCOMPLETE',
+])
+const AUTOMATIC_REPLAY_BLOCKED_CODES = new Set(['AI_CALL_INCOMPLETE'])
 const PARSER_PATH_FAILURE = /无法定位|解析进程启动失败|Cannot find module|ERR_MODULE_NOT_FOUND/
 const PARSER_CHILD_TIMEOUT_MS = 30_000
 const DEFAULT_PARSER_MEMORY_MB = 256
 const DEFAULT_TIMEOUT_MS = 180_000
 const DEFAULT_POLL_MS = 1_000
-const MILESTONE_TARGET_DATE = '2099-12-31'
+const JOB_EVENTS_TIMEOUT_MS = 2_000
+const STAGE_DESCRIPTION_LIMIT = 300
 const SMOKE_CHANNEL_NAME = 'deployment-smoke'
 const SMOKE_MODEL_NAME = 'deployment-smoke-model'
 const SMOKE_API_KEY = 'deployment-smoke-key'
 const SMOKE_MODEL_CONTEXT_CHARACTERS = 8_000
 const SMOKE_MODEL_OUTPUT_TOKENS = 256
 const FALLBACK_ASSIGNMENT_TARGETS = ['page_analysis', 'report_insight']
+const COMPLETION_RETAINED_WARNING = 'formal completion retained; native report data will not be physically deleted'
+export const SMOKE_STAGE_PLAN_DATES = [
+  { plannedStartAt: '2026-03-01', plannedEndAt: '2026-06-30' },
+  { plannedStartAt: '2026-07-01', plannedEndAt: '2026-12-31' },
+]
 
-class SmokeError extends Error {
+export function smokeStagePlanDates(index) {
+  return SMOKE_STAGE_PLAN_DATES[Math.min(Math.max(index, 0), SMOKE_STAGE_PLAN_DATES.length - 1)]
+}
+
+export function smokeStageIds(marker) {
+  const token = String(marker ?? 'smoke').replace(/[^A-Za-z0-9_-]/g, '-').slice(0, 48) || 'smoke'
+  return {
+    first: `smoke-${token}-s1`,
+    second: `smoke-${token}-s2`,
+  }
+}
+
+export class SmokeError extends Error {
   constructor(message, { exitCode = 1 } = {}) {
     super(message)
     this.name = 'SmokeError'
@@ -43,7 +68,7 @@ class SmokeError extends Error {
   }
 }
 
-function usage() {
+export function usage() {
   return `YanXing production deployment smoke.
 
 Required:
@@ -59,13 +84,19 @@ Optional:
   YANXING_SMOKE_MODEL_HOST=${DEFAULT_MODEL_HOST}  (same-container mock; default 127.0.0.1)
   YANXING_SMOKE_EXPECTED_FAILURE=<unique token returned by the in-process model stub>
 
+Native protocol:
+  POST /api/projects with stages, PATCH /api/projects/:id/stages,
+  raw POST /api/projects/:id/report-uploads?fileName=, then JSON POST /api/projects/:id/reports
+  with Idempotency-Key. Analysis and insight are polled independently.
+  Project DELETE is rejected (409 retention). Formal completions are not physically deleted.
+
 Usage:
   node scripts/deployment-smoke.mjs
   node scripts/deployment-smoke.mjs --verify
 `
 }
 
-async function main() {
+export async function main() {
   const args = parseArgs(process.argv.slice(2))
   if (args.help) {
     console.log(usage())
@@ -86,7 +117,7 @@ async function main() {
   }
 }
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
   let verify = false
   let help = false
   for (const argument of argv) {
@@ -97,7 +128,7 @@ function parseArgs(argv) {
   return { verify, help }
 }
 
-function readConfig(args) {
+export function readConfig(args) {
   if (process.env.YANXING_SMOKE_ALLOW_MUTATIONS !== 'true') {
     throw new SmokeError('必须设置 YANXING_SMOKE_ALLOW_MUTATIONS=true 才会执行会写入数据的冒烟测试。', { exitCode: 2 })
   }
@@ -132,20 +163,27 @@ function readModelHost(value) {
   return host
 }
 
-async function runFull({ client, config, modelPort }) {
+export async function runFull({ client, config, modelPort, assertParsers = assertParserChildren }) {
   const startedAt = new Date().toISOString()
+  const warnings = []
   log('login', config.baseUrl)
   await client.login({ username: config.username, password: config.password })
   await ensureSmokeModel({ client, config, modelPort })
 
   const documents = createSmokeDocuments(config.marker)
   log('parser-child', 'PDF/DOCX')
-  await assertParserChildren(documents)
+  await assertParsers(documents)
 
   log('create-project', config.marker)
-  const project = await createSmokeProject(client, config.marker)
-  const milestoneId = project.milestones?.[0]?.id
-  if (!milestoneId) throw new SmokeError('创建课题成功但缺少研究阶段。')
+  const created = await createSmokeProject(client, config.marker)
+  log('edit-plan', created.project.id)
+  await editSmokeStagePlan({
+    client,
+    projectId: created.project.id,
+    workflow: created.workflow,
+    stages: created.stages,
+    marker: config.marker,
+  })
 
   const reportRecords = []
   const manifest = {
@@ -154,31 +192,52 @@ async function runFull({ client, config, modelPort }) {
     createdAt: startedAt,
     baseUrl: config.baseUrl,
     expectedFailure: config.expectedFailure,
-    projectId: project.id,
-    projectTitle: project.title,
+    projectId: created.project.id,
+    projectTitle: created.project.title,
     reports: reportRecords,
+    warnings,
   }
   const deadline = Date.now() + config.timeoutMs
   const workerOutcomes = []
-  for (const document of [documents.pdf, documents.docx]) {
+  for (const [index, document] of [documents.pdf, documents.docx].entries()) {
     workerOutcomes.push(await ingestAndAnalyzeReport({
       client,
       config,
-      projectId: project.id,
-      milestoneId,
+      projectId: created.project.id,
       document,
       deadline,
       reportRecords,
       manifest,
+      retryAnalysis: index === 0,
     }))
   }
+
+  log('retired-protocol', created.project.id)
+  await probeRetiredWritePaths(client, { projectId: created.project.id, reportId: reportRecords[0].id })
+
+  log('protected-completion', created.project.id)
+  const completion = await probeProtectedCompletion({
+    client,
+    config,
+    projectId: created.project.id,
+    document: documents.pdf,
+    deadline,
+  })
+  reportRecords.push(completion.record)
+  warnings.push(COMPLETION_RETAINED_WARNING)
+  manifest.completionRetained = true
+  await writeManifest(config.manifestPath, manifest)
+  log('retention', `${COMPLETION_RETAINED_WARNING}: ${completion.record.id}`)
+
   return {
     ok: true,
     mode: 'full',
     manifestPath: config.manifestPath,
-    projectId: project.id,
+    projectId: created.project.id,
     reports: reportRecords,
     workerOutcomes,
+    warnings,
+    completionRetained: true,
   }
 }
 
@@ -186,51 +245,53 @@ async function ingestAndAnalyzeReport({
   client,
   config,
   projectId,
-  milestoneId,
   document,
   deadline,
   reportRecords,
   manifest,
+  retryAnalysis,
 }) {
   log('upload', document.kind)
-  const uploaded = await uploadReport(client, {
+  const receipt = await submitNativeReport({
+    client,
     projectId,
-    milestoneId,
-    fileName: document.fileName,
-    mimeType: document.kind === 'PDF' ? PDF_MIME_TYPE : DOCX_MIME_TYPE,
-    bytes: document.bytes,
+    document,
+    reportKind: 'update',
+    deadline,
+    pollMs: config.pollMs,
   })
-  assertUploadHash(uploaded, document.sha256)
-  const record = toManifestReport(document.kind === 'PDF' ? 'pdf' : 'docx', uploaded, document)
+  const record = toManifestReport({ kind: document.kind === 'PDF' ? 'pdf' : 'docx', document, receipt })
   reportRecords.push(record)
   await writeManifest(config.manifestPath, manifest)
-  log('manifest', config.manifestPath)
 
   log('analyze', record.id)
-  record.jobId = await requestAnalysis(client, record.id)
-  await writeManifest(config.manifestPath, manifest)
-
-  const jobs = await waitForJobs({ client, jobIds: [record.jobId], deadline, pollMs: config.pollMs })
-  const detail = await client.readJson('GET', `/api/reports/${record.id}`)
-  const report = detail.report
-  if (!report) throw new SmokeError(`报告 ${record.id} 读取失败。`)
-  const job = jobs.get(record.jobId) ?? detail.job
-  if (!job) throw new SmokeError(`任务 ${record.jobId} 读取失败。`)
-  record.parseStatus = report.parseStatus
-  record.parseError = report.parseError
-  record.jobStatus = job.status
-  record.jobError = job.errorMessage
-  record.lastWorkerId = job.lastWorkerId
+  const ai = await collectAiOutcomes({
+    client,
+    reportId: record.id,
+    deadline,
+    pollMs: config.pollMs,
+    retryAnalysis,
+  })
+  const detail = await readNativeReport(client, record.id)
+  assertNativeLabels(detail)
+  record.stageId = detail.stageId
+  record.stageVersion = detail.stageVersion
+  record.submissionSequence = detail.submissionSequence
+  record.submittedAs = detail.submittedAs
+  record.analysisTaskId = ai.analysis?.id
+  record.insightTaskId = ai.insight?.id
+  record.analysisStatus = ai.analysis?.status
+  record.insightStatus = ai.insight?.status
   const outcome = assertWorkerOutcome({
-    job,
-    report,
+    analysisTask: ai.analysis,
+    insightTask: ai.insight,
     expectedFailure: config.expectedFailure,
   })
   await writeManifest(config.manifestPath, manifest)
   return outcome
 }
 
-async function runVerify({ client, config }) {
+export async function runVerify({ client, config }) {
   log('login', config.baseUrl)
   await client.login({ username: config.username, password: config.password })
   const manifest = await readManifest(config.manifestPath)
@@ -241,23 +302,37 @@ async function runVerify({ client, config }) {
   const byId = new Map(reports.map((report) => [report.id, report]))
   const verified = []
   for (const record of manifest.reports) {
-    if (!byId.has(record.id)) throw new SmokeError(`验证失败：报告 ${record.id} 不存在。`)
-    const detail = await client.readJson('GET', `/api/reports/${record.id}`)
-    const fileHash = detail.report?.fileHash
-    if (fileHash !== record.sha256) {
-      throw new SmokeError(`验证失败：报告 ${record.id} 的 fileHash 不匹配。`)
+    const listed = byId.get(record.id)
+    if (!listed) throw new SmokeError(`验证失败：报告 ${record.id} 不存在。`)
+    if (record.stageVersion != null && listed.stageVersion !== record.stageVersion) {
+      throw new SmokeError(`验证失败：报告 ${record.id} 的 stageVersion 不匹配。`)
     }
+    if (record.submissionSequence != null && listed.submissionSequence !== record.submissionSequence) {
+      throw new SmokeError(`验证失败：报告 ${record.id} 的 submissionSequence 不匹配。`)
+    }
+    const detail = await readNativeReport(client, record.id)
+    assertNativeLabels(detail)
     const downloaded = await client.readBuffer('GET', `/api/reports/${record.id}/file?download=1`)
     const sha256 = sha256Hex(downloaded)
     if (sha256 !== record.sha256) {
       throw new SmokeError(`验证失败：报告 ${record.id} 下载内容哈希不匹配。`)
     }
-    verified.push({ id: record.id, kind: record.kind, sha256, bytes: downloaded.byteLength })
+    verified.push({
+      id: record.id,
+      kind: record.kind,
+      sha256,
+      bytes: downloaded.byteLength,
+      stageVersion: listed.stageVersion,
+      submissionSequence: listed.submissionSequence,
+    })
+  }
+  if (manifest.completionRetained) {
+    log('retention', COMPLETION_RETAINED_WARNING)
   }
   return { ok: true, mode: 'verify', manifestPath: config.manifestPath, projectId: manifest.projectId, reports: verified }
 }
 
-function createSmokeDocuments(marker) {
+export function createSmokeDocuments(marker) {
   const pdfText = `YXPDF ${marker}`
   const docxText = `YXDOCX ${marker}`
   const pdfBytes = createMinimalPdfBuffer(pdfText)
@@ -328,7 +403,7 @@ async function saveAiSettings(client, json) {
   return payload.settings
 }
 
-function startMockModelServer(failureMessage) {
+export function startMockModelServer(failureMessage) {
   const body = JSON.stringify({ error: { message: failureMessage } })
   return new Promise((resolve, reject) => {
     const server = createServer((request, response) => {
@@ -350,7 +425,7 @@ function startMockModelServer(failureMessage) {
   })
 }
 
-function closeMockServer(server) {
+export function closeMockServer(server) {
   return new Promise((resolve, reject) => {
     server.close((error) => {
       if (error) reject(error)
@@ -359,7 +434,7 @@ function closeMockServer(server) {
   })
 }
 
-async function assertParserChildren(documents) {
+export async function assertParserChildren(documents) {
   const parent = existsSync(path.join(process.cwd(), 'storage'))
     ? path.join(process.cwd(), 'storage', 'tmp')
     : os.tmpdir()
@@ -439,109 +514,405 @@ function spawnParserJson({ kind, runtime, filePath }) {
   })
 }
 
-async function createSmokeProject(client, marker) {
+export async function createSmokeProject(client, marker) {
+  const stageIds = smokeStageIds(marker)
   const payload = await client.readJson('POST', '/api/projects', {
     json: {
       title: `deployment-smoke ${marker}`,
-      objective: 'Production deployment smoke: verify upload, parser child, and worker queue.',
-      description: 'Disposable smoke project. Safe to keep; do not delete until Worker has finished.',
-      milestones: [
+      objective: 'Production deployment smoke: native prepare/confirm, parser child, and independent AI tasks.',
+      description: 'Disposable smoke project. Formal reports are retained; project DELETE is rejected.',
+      stages: [
         {
-          id: 'smoke-stage-1',
+          id: stageIds.first,
           title: 'Smoke stage',
-          targetDate: MILESTONE_TARGET_DATE,
-          description: 'Upload PDF/DOCX and request analysis for deployment smoke.',
+          description: 'Upload PDF/DOCX and confirm native report submissions for deployment smoke.',
+          plannedStartAt: SMOKE_STAGE_PLAN_DATES[0].plannedStartAt,
+          plannedEndAt: SMOKE_STAGE_PLAN_DATES[0].plannedEndAt,
+        },
+        {
+          id: stageIds.second,
+          title: 'Smoke follow-up',
+          description: 'Remain in progress after an explicit completion protection check.',
+          plannedStartAt: SMOKE_STAGE_PLAN_DATES[1].plannedStartAt,
+          plannedEndAt: SMOKE_STAGE_PLAN_DATES[1].plannedEndAt,
         },
       ],
     },
+    expectedStatus: 201,
   })
-  if (!payload.project?.id) throw new SmokeError('创建课题失败：响应缺少 project.id。')
-  return payload.project
+  return readCreatedProject(payload)
 }
 
-async function uploadReport(client, { projectId, milestoneId, fileName, mimeType, bytes }) {
-  const payload = await client.readJson('POST', `/api/projects/${projectId}/reports`, {
-    headers: {
-      'Content-Type': mimeType,
-      'x-file-name': encodeURIComponent(fileName),
-      'x-report-delivery-type': 'stage',
-      'x-milestone-id': encodeURIComponent(milestoneId),
-    },
+export async function editSmokeStagePlan({ client, projectId, workflow, stages, marker }) {
+  const nextStages = stages.map((stage, index) => {
+    const dates = smokeStagePlanDates(index)
+    const next = {
+      id: stage.id,
+      title: stage.title,
+      plannedStartAt: stage.plannedStartAt || dates.plannedStartAt,
+      plannedEndAt: stage.plannedEndAt || dates.plannedEndAt,
+    }
+    const description = withSmokeDescription(stage.description, index === 0 ? marker : undefined)
+    if (description) next.description = description
+    return next
+  })
+  const payload = await client.readJson('PATCH', `/api/projects/${projectId}/stages`, {
+    json: { expectedPlanRevision: workflow.planRevision, nextStages },
+  })
+  return readWorkflowBundle(payload, '更新阶段计划')
+}
+
+export async function prepareReportUpload(client, { projectId, fileName, mimeType, bytes }) {
+  const pathname = `/api/projects/${projectId}/report-uploads?fileName=${encodeURIComponent(fileName)}`
+  const payload = await client.readJson('POST', pathname, {
+    headers: { 'Content-Type': mimeType },
     body: bytes,
-    expectedStatus: 202,
+    expectedStatus: 201,
   })
-  if (!payload.report?.id) throw new SmokeError(`上传 ${fileName} 失败：响应缺少 report.id。`)
-  return payload.report
+  if (!payload?.id) throw new SmokeError(`准备上传 ${fileName} 失败：响应缺少 upload id。`)
+  return payload
 }
 
-function assertUploadHash(report, sha256) {
-  if (report.fileHash && report.fileHash !== sha256) {
-    throw new SmokeError(`上传后 fileHash 不匹配：${report.id}`)
-  }
-}
-
-async function requestAnalysis(client, reportId) {
-  const response = await client.request('POST', `/api/reports/${reportId}/analyze`)
-  if (response.status === 202 && response.json?.job?.id) return response.json.job.id
-  throw new SmokeError(`启动分析失败（HTTP ${response.status}）：${readErrorMessage(response) || '未知错误'}`)
-}
-
-async function waitForJobs({ client, jobIds, deadline, pollMs }) {
-  const remaining = new Set(jobIds)
-  const jobs = new Map()
-  while (remaining.size > 0) {
-    if (Date.now() >= deadline) {
-      throw new SmokeError(`等待 Worker 终态超时，仍未完成：${[...remaining].join(', ')}`)
+export async function waitForUploadReady(client, { projectId, upload, deadline, pollMs }) {
+  let current = await client.readJson('GET', `/api/projects/${projectId}/report-uploads/${upload.id}`)
+  while (current.status !== 'ready') {
+    if (current.status === 'failed') {
+      throw new SmokeError(`准备记录 ${current.id} 解析失败：${current.errorCode ?? 'UPLOAD_FAILED'}`)
     }
-    for (const jobId of [...remaining]) {
-      const payload = await client.readJson('GET', `/api/jobs/${jobId}`)
-      const job = payload.job
-      if (!job) throw new SmokeError(`任务 ${jobId} 不存在。`)
-      jobs.set(jobId, job)
-      if (TERMINAL_JOB_STATUSES.has(job.status)) remaining.delete(jobId)
-    }
-    if (remaining.size > 0) await delay(pollMs)
+    if (Date.now() >= deadline) throw new SmokeError(`等待准备记录 ${current.id} 就绪超时。`)
+    await delay(pollMs)
+    current = await client.readJson('GET', `/api/projects/${projectId}/report-uploads/${current.id}`)
   }
-  return jobs
+  return current
 }
 
-function assertWorkerOutcome({ job, report, expectedFailure }) {
-  if (!TERMINAL_JOB_STATUSES.has(job.status)) {
-    throw new SmokeError(`任务 ${job.id} 未到达终态：${job.status}`)
+export async function confirmReportSubmission(client, { projectId, uploadId, stage, workflow, reportKind, idempotencyKey }) {
+  const payload = await client.readJson('POST', `/api/projects/${projectId}/reports`, {
+    headers: { 'Idempotency-Key': idempotencyKey },
+    json: {
+      uploadId,
+      stageId: stage.id,
+      reportKind,
+      expectedPlanRevision: workflow.planRevision,
+      expectedWorkflowRevision: workflow.workflowRevision,
+      expectedCompletionRevision: stage.completionRevision,
+      expectedCompletionReportId: stage.currentCompletionReportId ?? null,
+    },
+  })
+  if (!payload?.receipt?.reportId) throw new SmokeError('确认提交失败：响应缺少 receipt.reportId。')
+  assertNativeLabels(payload.receipt)
+  return payload
+}
+
+async function submitNativeReport({ client, projectId, document, reportKind, deadline, pollMs }) {
+  const mimeType = document.kind === 'PDF' ? PDF_MIME_TYPE : DOCX_MIME_TYPE
+  const prepared = await prepareReportUpload(client, {
+    projectId,
+    fileName: document.fileName,
+    mimeType,
+    bytes: document.bytes,
+  })
+  const upload = await waitForUploadReady(client, { projectId, upload: prepared, deadline, pollMs })
+  const bundle = await loadStages(client, projectId)
+  const stage = currentSubmitStage(bundle.stages)
+  const confirmed = await confirmReportSubmission(client, {
+    projectId,
+    uploadId: upload.id,
+    stage,
+    workflow: bundle.workflow,
+    reportKind,
+    idempotencyKey: createIdempotencyKey(),
+  })
+  await assertDownloadedHash(client, confirmed.receipt.reportId, document.sha256)
+  return confirmed.receipt
+}
+
+export async function loadStages(client, projectId) {
+  const payload = await client.readJson('GET', `/api/projects/${projectId}/stages`)
+  return readWorkflowBundle(payload, '读取阶段计划')
+}
+
+async function collectAiOutcomes({ client, reportId, deadline, pollMs, retryAnalysis }) {
+  const [analysis, insight] = await Promise.all([
+    waitForAnalysisTask({ client, reportId, deadline, pollMs }),
+    waitForInsightTask({ client, reportId, deadline, pollMs }),
+  ])
+  let analysisTask = analysis
+  if (retryAnalysis && analysisTask?.status === 'failed' && analysisTask.id) {
+    if (AUTOMATIC_REPLAY_BLOCKED_CODES.has(analysisTask.errorCode)) {
+      log('retry-skip', `${analysisTask.id} ${analysisTask.errorCode}`)
+    } else {
+      log('retry', analysisTask.id)
+      const retried = await client.request('POST', `/api/jobs/${analysisTask.id}/retry`)
+      if ((retried.status === 200 || retried.status === 202) && retried.json?.job?.id) {
+        analysisTask = await waitForAnalysisTask({ client, reportId, deadline, pollMs })
+      }
+    }
   }
-  if (!job.lastWorkerId && !job.lastClaimedAt) {
-    throw new SmokeError(`任务 ${job.id} 终态为 ${job.status}，但没有 Worker 领取记录。`)
+  if (analysisTask?.id) await probeJobEvents(client, analysisTask.id)
+  if (insight?.id) await probeJobEvents(client, insight.id)
+  return { analysis: analysisTask, insight }
+}
+
+export async function waitForAnalysisTask({ client, reportId, deadline, pollMs }) {
+  return waitForNativeTask({ client, reportId, operation: 'analysis', deadline, pollMs, optional: false })
+}
+
+export async function waitForInsightTask({ client, reportId, deadline, pollMs }) {
+  return waitForNativeTask({ client, reportId, operation: 'insight', deadline, pollMs, optional: true })
+}
+
+async function waitForNativeTask({ client, reportId, operation, deadline, pollMs, optional }) {
+  let startAttempted = false
+  let jobId
+  while (Date.now() < deadline) {
+    const detail = await readNativeReport(client, reportId)
+    let task = operation === 'analysis' ? detail.analysisTask : detail.insightTask
+    if (!task?.id && !startAttempted) {
+      startAttempted = true
+      task = await startNativeTask(client, reportId, operation, optional)
+      if (!task?.id && optional) return null
+    }
+    if (task?.id) jobId = task.id
+    if (jobId) {
+      const viewed = await readJobView(client, jobId)
+      if (TERMINAL_TASK_STATUSES.has(viewed.status)) return viewed
+    }
+    await delay(pollMs)
   }
-  const combined = `${job.errorMessage ?? ''} ${report.parseError ?? ''}`
-  if (PARSER_PATH_FAILURE.test(combined)) {
-    throw new SmokeError(`解析子进程失败：${combined.trim()}`)
+  if (optional) return null
+  throw new SmokeError(`等待 ${operation} 终态超时：${reportId}`)
+}
+
+async function startNativeTask(client, reportId, operation, optional) {
+  const pathname = operation === 'analysis'
+    ? `/api/reports/${reportId}/analyze`
+    : `/api/reports/${reportId}/insight`
+  const response = await client.request('POST', pathname)
+  if ((response.status === 202 || response.status === 200) && response.json?.job?.id) {
+    return response.json.job
   }
-  if (report.parseStatus !== 'ready') {
-    throw new SmokeError(`报告 ${report.id} 解析状态为 ${report.parseStatus ?? 'unknown'}，期望 ready。${combined.trim()}`)
+  if (optional && response.status >= 400 && response.status < 500) {
+    log(`${operation}-skip`, readErrorMessage(response) || `HTTP ${response.status}`)
+    return null
   }
-  if (job.status !== 'failed') {
-    throw new SmokeError(`任务 ${job.id} 终态为 ${job.status}，期望模型桩返回的失败。`)
+  throw new SmokeError(`启动 ${operation} 失败（HTTP ${response.status}）：${readErrorMessage(response) || '未知错误'}`)
+}
+
+async function readJobView(client, jobId) {
+  const payload = await client.readJson('GET', `/api/jobs/${jobId}`)
+  const job = payload.job
+  if (!job?.id) throw new SmokeError(`任务 ${jobId} 不存在。`)
+  return job
+}
+
+async function probeJobEvents(client, jobId) {
+  try {
+    const response = await client.request('GET', `/api/jobs/${jobId}/events`, {
+      parseJson: false,
+      timeoutMs: JOB_EVENTS_TIMEOUT_MS,
+    })
+    if (response.status !== 200) {
+      log('job-events', `HTTP ${response.status}`)
+    }
+  } catch (error) {
+    log('job-events', error instanceof Error ? error.message : String(error))
   }
-  if (!String(job.errorMessage ?? '').includes(expectedFailure)) {
-    throw new SmokeError(`任务 ${job.id} 失败原因超出预期：${job.errorMessage ?? '未知错误'}`)
+}
+
+export function assertWorkerOutcome({ analysisTask, insightTask, expectedFailure }) {
+  if (!analysisTask?.id) throw new SmokeError('缺少 analysisTask。')
+  if (!TERMINAL_TASK_STATUSES.has(analysisTask.status)) {
+    throw new SmokeError(`分析任务 ${analysisTask.id} 未到达终态：${analysisTask.status}`)
+  }
+  const diagnostic = [
+    analysisTask.errorCode,
+    analysisTask.errorMessage,
+    insightTask?.errorCode,
+    insightTask?.errorMessage,
+  ].filter(Boolean).join(' ')
+  if (PARSER_PATH_FAILURE.test(diagnostic)) {
+    throw new SmokeError(`解析子进程失败：${diagnostic}`)
+  }
+  if (analysisTask.status !== 'failed') {
+    throw new SmokeError(`分析任务 ${analysisTask.id} 终态为 ${analysisTask.status}，期望模型桩返回的失败。`)
+  }
+  const nativeFailure = NATIVE_AI_FAILURE_CODES.has(analysisTask.errorCode)
+  const expectedHit = diagnostic.includes(expectedFailure)
+  if (!nativeFailure && !expectedHit) {
+    throw new SmokeError(`分析任务 ${analysisTask.id} 失败原因超出预期：${analysisTask.errorCode ?? '未知错误'}`)
+  }
+  if (insightTask && !TERMINAL_TASK_STATUSES.has(insightTask.status) && insightTask.status !== undefined) {
+    throw new SmokeError(`洞察任务 ${insightTask.id} 未到达终态：${insightTask.status}`)
   }
   return {
-    reportId: report.id,
-    jobId: job.id,
-    status: job.status,
-    parseStatus: report.parseStatus,
-    lastWorkerId: job.lastWorkerId,
+    reportId: analysisTask.reportId,
+    analysisTaskId: analysisTask.id,
+    insightTaskId: insightTask?.id,
+    status: analysisTask.status,
+    errorCode: analysisTask.errorCode,
     expectedModelFailure: true,
   }
 }
 
-function toManifestReport(kind, report, document) {
+export async function probeRetiredWritePaths(client, { projectId, reportId }) {
+  const direct = await client.request('POST', `/api/projects/${projectId}/reports`, {
+    headers: {
+      'Content-Type': PDF_MIME_TYPE,
+      'x-file-name': encodeURIComponent('legacy-direct.pdf'),
+    },
+    body: Buffer.from('%PDF-1.4'),
+  })
+  assertErrorCode(direct, 410, 'UPLOAD_PROTOCOL_RETIRED', '旧直传报告协议')
+
+  const patch = await client.request('PATCH', `/api/reports/${reportId}`, {
+    json: { stageId: 'smoke-stage-2' },
+  })
+  assertErrorCode(patch, 409, 'REPORT_STAGE_IMMUTABLE', '修改报告阶段')
+
+  const put = await client.request('PUT', `/api/reports/${reportId}`, {
+    json: { sourcePath: '/tmp/replaced.pdf' },
+  })
+  assertErrorCode(put, 409, 'REPORT_SOURCE_IMMUTABLE', '替换报告源文件')
+
+  await assertProjectRetained(client, projectId)
+}
+
+export async function probeProtectedCompletion({ client, config, projectId, document, deadline }) {
+  const receipt = await submitNativeReport({
+    client,
+    projectId,
+    document: {
+      ...document,
+      fileName: document.fileName.replace(/(\.pdf|\.docx)$/i, '-completion$1'),
+    },
+    reportKind: 'completion',
+    deadline,
+    pollMs: config.pollMs,
+  })
+  const deleted = await client.request('DELETE', `/api/reports/${receipt.reportId}`, {
+    json: { reason: 'deployment-smoke protected completion check' },
+  })
+  assertErrorCode(deleted, 409, 'COMPLETION_REPORT_PROTECTED', '删除当前完结报告')
   return {
-    id: report.id,
+    record: toManifestReport({
+      kind: document.kind === 'PDF' ? 'pdf' : 'docx',
+      document,
+      receipt,
+      submittedAs: 'completion',
+    }),
+  }
+}
+
+export async function cleanupSmokeData({ client, manifest }) {
+  const completions = (manifest.reports ?? []).filter((report) => (
+    report.submittedAs === 'completion' || report.isCurrentCompletion
+  ))
+  if (completions.length > 0) {
+    log('cleanup', `${COMPLETION_RETAINED_WARNING}: ${completions.map((item) => item.id).join(', ')}`)
+    await assertProjectRetained(client, manifest.projectId)
+    return {
+      ok: true,
+      retained: true,
+      reason: 'completion',
+      reportIds: completions.map((item) => item.id),
+    }
+  }
+  for (const report of manifest.reports ?? []) {
+    const response = await client.request('DELETE', `/api/reports/${report.id}`, {
+      json: { reason: `deployment-smoke logical cleanup ${manifest.marker ?? ''}`.trim() },
+    })
+    if (response.status !== 200) {
+      throw new SmokeError(`逻辑删除更新报告失败（HTTP ${response.status}）：${readErrorMessage(response)}`)
+    }
+  }
+  await assertProjectRetained(client, manifest.projectId)
+  log('cleanup', 'update reports logically deleted; project and files retained')
+  return { ok: true, retained: true, reason: 'project-retention' }
+}
+
+async function assertProjectRetained(client, projectId) {
+  const response = await client.request('DELETE', `/api/projects/${projectId}`)
+  assertErrorCode(response, 409, 'PROJECT_RETENTION_REQUIRED', '删除课题')
+}
+
+async function assertDownloadedHash(client, reportId, sha256) {
+  const downloaded = await client.readBuffer('GET', `/api/reports/${reportId}/file?download=1`)
+  if (sha256Hex(downloaded) !== sha256) {
+    throw new SmokeError(`上传后下载哈希不匹配：${reportId}`)
+  }
+}
+
+async function readNativeReport(client, reportId) {
+  const payload = await client.readJson('GET', `/api/reports/${reportId}`)
+  if (!payload?.id) throw new SmokeError(`报告 ${reportId} 读取失败。`)
+  return payload
+}
+
+function readCreatedProject(payload) {
+  const project = payload?.project
+  if (!project?.id) throw new SmokeError('创建课题失败：响应缺少 project.id。')
+  const bundle = readWorkflowBundle(payload, '创建课题')
+  return { project, ...bundle }
+}
+
+function readWorkflowBundle(payload, context) {
+  const workflow = payload?.workflow
+  const groups = Array.isArray(payload?.stages) ? payload.stages : []
+  if (!workflow || !Number.isInteger(workflow.planRevision) || groups.length === 0) {
+    throw new SmokeError(`${context}：响应缺少 workflow/stages。`)
+  }
+  const stages = groups.map((group) => {
+    const stage = group?.stage ?? group
+    if (!stage?.id) throw new SmokeError(`${context}：阶段缺少 id。`)
+    return stage
+  })
+  return { workflow, stages }
+}
+
+function currentSubmitStage(stages) {
+  const current = stages.find((stage) => stage.lifecycleStatus === 'in_progress') ?? stages[0]
+  if (!current?.id) throw new SmokeError('课题缺少可提交的研究阶段。')
+  return current
+}
+
+function assertNativeLabels(record) {
+  if (!Number.isSafeInteger(record.stageVersion) || record.stageVersion < 1) {
+    throw new SmokeError(`响应缺少有效 stageVersion：${record.reportId ?? record.id ?? ''}`)
+  }
+  if (!Number.isSafeInteger(record.submissionSequence) || record.submissionSequence < 1) {
+    throw new SmokeError(`响应缺少有效 submissionSequence：${record.reportId ?? record.id ?? ''}`)
+  }
+}
+
+function assertErrorCode(response, status, code, action) {
+  if (response.status !== status || response.json?.code !== code) {
+    throw new SmokeError(`${action} 期望 HTTP ${status}/${code}，实际 ${response.status}/${response.json?.code ?? 'missing'}`)
+  }
+}
+
+function withSmokeDescription(description, marker) {
+  const base = (description ?? 'Smoke stage').trim()
+  if (!marker) return base.slice(0, STAGE_DESCRIPTION_LIMIT)
+  const suffix = ` [${marker}]`
+  return (base + suffix).slice(0, STAGE_DESCRIPTION_LIMIT)
+}
+
+function toManifestReport({ kind, document, receipt, submittedAs }) {
+  return {
+    id: receipt.reportId,
     kind,
     fileName: document.fileName,
     sha256: document.sha256,
+    stageId: receipt.stageId,
+    stageVersion: receipt.stageVersion,
+    submissionSequence: receipt.submissionSequence,
+    submittedAs: submittedAs ?? receipt.submittedAs,
   }
+}
+
+export function createIdempotencyKey() {
+  return `smoke_${randomBytes(16).toString('hex')}`
 }
 
 async function writeManifest(manifestPath, manifest) {
@@ -568,7 +939,7 @@ async function readManifest(manifestPath) {
   return manifest
 }
 
-class SmokeClient {
+export class SmokeClient {
   constructor(config) {
     this.baseUrl = config.baseUrl
     this.timeoutMs = config.timeoutMs
@@ -632,7 +1003,7 @@ class SmokeClient {
         headers,
         body,
         redirect: 'manual',
-        signal: AbortSignal.timeout(this.timeoutMs),
+        signal: AbortSignal.timeout(options.timeoutMs ?? this.timeoutMs),
       })
     } catch (error) {
       throw new SmokeError(`无法连接 ${this.baseUrl}${pathname}：${error instanceof Error ? error.message : String(error)}`)
@@ -713,6 +1084,12 @@ function log(step, detail) {
 function isMainModule() {
   if (!process.argv[1]) return false
   return pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url
+}
+
+export {
+  COMPLETION_RETAINED_WARNING,
+  NATIVE_AI_FAILURE_CODES,
+  TERMINAL_TASK_STATUSES,
 }
 
 if (isMainModule()) {

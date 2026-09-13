@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 export function useToast(duration = 2800) {
   const [notice, setNotice] = useState('')
@@ -11,7 +11,7 @@ export function useToast(duration = 2800) {
     if (timerRef.current !== undefined) window.clearTimeout(timerRef.current)
   }, [])
 
-  function showNotice(message: string) {
+  const showNotice = useCallback((message: string) => {
     const sequence = sequenceRef.current + 1
     sequenceRef.current = sequence
     if (timerRef.current !== undefined) window.clearTimeout(timerRef.current)
@@ -21,13 +21,13 @@ export function useToast(duration = 2800) {
       setNotice('')
       timerRef.current = undefined
     }, duration)
-  }
+  }, [duration])
 
-  function clearNotice() {
+  const clearNotice = useCallback(() => {
     if (timerRef.current !== undefined) window.clearTimeout(timerRef.current)
     timerRef.current = undefined
     setNotice('')
-  }
+  }, [])
 
   return { notice, showNotice, clearNotice }
 }

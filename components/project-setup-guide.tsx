@@ -22,18 +22,18 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { IconBadge } from '@/components/ui/icon-badge'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
-import type { Milestone, ProjectWithCapabilities } from '@/modules/projects/domain'
+import type { StageProjectCreate } from '@/modules/projects/stage-project-contract'
+import { createIdempotencyKey } from '@/lib/workspace-submission'
 import { dateWeeksFromNow } from '@/modules/projects/milestone-presets'
 import type { SessionUser } from '@/modules/users/domain'
-import { apiFetch, mutationHeaders } from '@/lib/client-request'
 
 interface ProjectSetupGuideViewProps {
   users: SessionUser[]
   currentUser?: SessionUser
-  onProjectCreated: (project: ProjectWithCapabilities) => void
+  onCreate: (project: StageProjectCreate) => Promise<void>
 }
 
-type MilestoneDraft = {
+type StageDraft = {
   key: string
   title: string
   targetDate: string
@@ -48,7 +48,7 @@ const PLAN_PRESETS = [
     name: '智库决策标准四阶段',
     tag: '推荐 · 最全面',
     desc: '从立项大纲到产业调研、AI深度研判与成果评审的完整智库研究闭环',
-    milestones: [
+    stages: [
       { title: '课题立项与大纲拟定', offsetWeeks: 1, description: '确立研究框架、核心假设与章节大纲，明确分工与时间节奏。' },
       { title: '产业调研与事实萃取', offsetWeeks: 3, description: '搜集政策文件、行业研报与关键指标数据，形成事实素材库。' },
       { title: '报告起草与 AI 深度研判', offsetWeeks: 6, description: '完成报告初稿，借助多模型流水线进行事实萃取与质量评估。' },
@@ -60,7 +60,7 @@ const PLAN_PRESETS = [
     name: '实证学术研究三阶段',
     tag: '学术实证',
     desc: '聚焦理论模型推演、实证数据采集分析与论文成稿复核',
-    milestones: [
+    stages: [
       { title: '理论框架与文献推演', offsetWeeks: 2, description: '文献综述、理论模型推导与核心假说确立。' },
       { title: '实证调研与数据清洗', offsetWeeks: 6, description: '微观问卷与宏观数据搜集，完成计量回归与稳健性检验。' },
       { title: '论文撰写与成果答辩', offsetWeeks: 10, description: '撰写完整学术论文初稿，修改定稿并准备成果汇报。' },
@@ -71,7 +71,7 @@ const PLAN_PRESETS = [
     name: '敏捷专项调研两阶段',
     tag: '快速研判',
     desc: '适用于快速专项调研与应急决策支持任务，周期紧凑高效',
-    milestones: [
+    stages: [
       { title: '专项材料梳理与痛点剖析', offsetWeeks: 1, description: '快速聚合多源材料，提炼核心矛盾与关键发现。' },
       { title: '深度研判与决策建议输出', offsetWeeks: 2, description: '完成高管速读报告，提炼针对性对策建议。' },
     ],
@@ -79,7 +79,7 @@ const PLAN_PRESETS = [
 ]
 
 function makeDraftKey() {
-  return `draft-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  return 'stage_' + createIdempotencyKey(16)
 }
 
 function userInitial(user: SessionUser) {
@@ -102,7 +102,7 @@ export function nextOwnerIdAfterCurrentUser(input: {
 export function ProjectSetupGuideView({
   users,
   currentUser,
-  onProjectCreated,
+  onCreate,
 }: ProjectSetupGuideViewProps) {
   // 步骤索引：0 = 选题与立项, 1 = 团队与协同, 2 = 计划与排期, 3 = 确认与启动
   const [step, setStep] = useState<number>(0)
@@ -112,8 +112,8 @@ export function ProjectSetupGuideView({
   const [ownerId, setOwnerId] = useState<string>(() => currentUser?.id || '')
   const [collaboratorIds, setCollaboratorIds] = useState<string[]>([])
   const ownerTouchedRef = useRef(false)
-  const [milestones, setMilestones] = useState<MilestoneDraft[]>(() =>
-    PLAN_PRESETS[0].milestones.map((item) => ({
+  const [stages, setStages] = useState<StageDraft[]>(() =>
+    PLAN_PRESETS[0].stages.map((item) => ({
       title: item.title,
       targetDate: dateWeeksFromNow(item.offsetWeeks),
       description: item.description,
@@ -160,8 +160,8 @@ export function ProjectSetupGuideView({
   )
   // 应用推进计划预设
   function applyPlanPreset(preset: typeof PLAN_PRESETS[number]) {
-    setMilestones(
-      preset.milestones.map((item) => ({
+    setStages(
+      preset.stages.map((item) => ({
         title: item.title,
         targetDate: dateWeeksFromNow(item.offsetWeeks),
         description: item.description,
@@ -176,8 +176,8 @@ export function ProjectSetupGuideView({
     }, 3000)
   }
 
-  function addMilestone() {
-    setMilestones((prev) => [
+  function addStage() {
+    setStages((prev) => [
       ...prev,
       {
         key: makeDraftKey(),
@@ -188,16 +188,16 @@ export function ProjectSetupGuideView({
     ])
   }
 
-  function updateMilestone(key: string, patch: Partial<MilestoneDraft>) {
-    setMilestones((prev) => prev.map((item) => (item.key === key ? { ...item, ...patch } : item)))
+  function updateStage(key: string, patch: Partial<StageDraft>) {
+    setStages((prev) => prev.map((item) => (item.key === key ? { ...item, ...patch } : item)))
   }
 
-  function removeMilestone(key: string) {
-    if (milestones.length <= 1) {
+  function removeStage(key: string) {
+    if (stages.length <= 1) {
       setError('课题至少需要保留一个研究阶段。')
       return
     }
-    setMilestones((prev) => prev.filter((item) => item.key !== key))
+    setStages((prev) => prev.filter((item) => item.key !== key))
   }
 
   function validateStep(target: number): string {
@@ -208,11 +208,11 @@ export function ProjectSetupGuideView({
     if (target >= 2 && !ownerId) return '请指定课题负责人。'
     if (target >= 2 && collaboratorIds.length > 3) return '课题协作者不能超过 3 人。'
     if (target >= 3) {
-      if (!milestones.length) return '请至少创建一个研究阶段。'
-      for (const [index, milestone] of milestones.entries()) {
-        if (!milestone.title.trim()) return `请填写阶段 ${index + 1} 的阶段名称。`
-        if (!milestone.targetDate?.trim()) return `请为阶段 ${index + 1}「${milestone.title.trim()}」设定计划完成日期。`
-        if (!milestone.description.trim()) return `请填写阶段 ${index + 1}「${milestone.title.trim()}」的工作内容与预期成果。`
+      if (!stages.length) return '请至少创建一个研究阶段。'
+      for (const [index, stage] of stages.entries()) {
+        if (!stage.title.trim()) return `请填写阶段 ${index + 1} 的阶段名称。`
+        if (!stage.targetDate?.trim()) return `请为阶段 ${index + 1}「${stage.title.trim()}」设定计划完成日期。`
+        if (!stage.description.trim()) return `请填写阶段 ${index + 1}「${stage.title.trim()}」的工作内容与预期成果。`
       }
     }
     return ''
@@ -238,41 +238,25 @@ export function ProjectSetupGuideView({
     setLoading(true)
     setError('')
 
-    const payload = {
+    const payload: StageProjectCreate = {
       title: title.trim(),
       objective: objective.trim(),
       description: description.trim(),
       ownerId,
       collaboratorIds,
-      milestones: milestones.map((item, index): Milestone => ({
-        id: `stage-${index + 1}`,
+      stages: stages.map((item) => ({
+        id: item.key,
         title: item.title.trim(),
-        targetDate: item.targetDate.trim(),
+        plannedEndAt: item.targetDate.trim(),
         description: item.description.trim(),
-        status: 'not_started',
       })),
     }
 
     try {
-      const response = await apiFetch('/api/projects', {
-        method: 'POST',
-        headers: mutationHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify(payload),
-      })
-      const body = (await response.json().catch(() => null)) as {
-        project?: ProjectWithCapabilities
-        error?: string
-      } | null
-
-      if (!response.ok || !body?.project) {
-        setError(body?.error ?? '创建课题失败，请检查网络或重试。')
-        setLoading(false)
-        return
-      }
-
-      onProjectCreated(body.project)
-    } catch {
-      setError('网络连接异常，请稍后重试。')
+      await onCreate(payload)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : '创建课题失败，请稍后重试。')
+    } finally {
       setLoading(false)
     }
   }
@@ -452,7 +436,7 @@ export function ProjectSetupGuideView({
                     组建课题组研究团队
                   </h3>
                   <p className="mt-1 text-xs text-yx-muted">
-                    课题负责人统筹研究大纲与最终结论，协作者可协同上传报告版本与跟进里程碑。
+                    课题负责人统筹研究大纲与最终结论，管理员与负责人可提交报告，协作者以只读方式跟进研究。
                   </p>
                 </div>
 
@@ -483,13 +467,13 @@ export function ProjectSetupGuideView({
                 <UserPickerSection
                   title="课题协作者"
                   tag="协同攻关"
-                  description="协作者可参与研报初稿上传、数据核验与阶段里程碑推进，最多 3 人。"
+                  description="协作者可查阅报告、分析结果与研究进度，不具有提交或修改权限，最多 3 人。"
                   users={users}
                   selectedIds={collaboratorIds}
                   excludeIds={ownerId ? [ownerId] : []}
                   maxSelect={3}
                   onChange={setCollaboratorIds}
-                  emptyHint="可选。如暂无协作者，创建后亦可随时邀请加入"
+                  emptyHint="可选。创建后由管理员在成员管理中调整"
                 />
               </section>
             )}
@@ -545,10 +529,10 @@ export function ProjectSetupGuideView({
                 {/* 里程碑编辑列表 */}
                 <div className="space-y-3">
                   <div className="flex items-center justify-between text-xs font-bold text-yx-ink">
-                    <span>阶段里程碑列表 ({milestones.length} 阶段)</span>
+                    <span>阶段里程碑列表 ({stages.length} 阶段)</span>
                     <button
                       type="button"
-                      onClick={addMilestone}
+                      onClick={addStage}
                       className="flex items-center gap-1 text-yx-brand-hover hover:underline"
                     >
                       <Plus className="h-3.5 w-3.5" />
@@ -556,7 +540,7 @@ export function ProjectSetupGuideView({
                     </button>
                   </div>
 
-                  {milestones.map((item, index) => (
+                  {stages.map((item, index) => (
                     <div
                       key={item.key}
                       className="group relative rounded-lg border border-yx-line bg-yx-paper p-4 shadow-2xs transition-all hover:border-yx-brand/40"
@@ -573,7 +557,7 @@ export function ProjectSetupGuideView({
                               required
                               maxLength={120}
                               inputSize="sm"
-                              onChange={(e) => updateMilestone(item.key, { title: e.target.value })}
+                              onChange={(e) => updateStage(item.key, { title: e.target.value })}
                               placeholder="阶段名称（必填），例如：产业调研与事实数据萃取"
                               className="font-bold"
                             />
@@ -582,7 +566,7 @@ export function ProjectSetupGuideView({
                               required
                               inputSize="sm"
                               value={item.targetDate || ''}
-                              onChange={(e) => updateMilestone(item.key, { targetDate: e.target.value })}
+                              onChange={(e) => updateStage(item.key, { targetDate: e.target.value })}
                               title="设定计划完成日期（必填）"
                               className="text-xs text-yx-ink tabular-nums"
                             />
@@ -594,15 +578,15 @@ export function ProjectSetupGuideView({
                             rows={2}
                             maxLength={300}
                             textareaSize="sm"
-                            onChange={(e) => updateMilestone(item.key, { description: e.target.value })}
+                            onChange={(e) => updateStage(item.key, { description: e.target.value })}
                             placeholder="工作内容与预期成果（必填），例如：完成政策文件梳理与实证数据初筛…"
                             className="w-full"
                           />
                         </div>
                         <button
                           type="button"
-                          onClick={() => removeMilestone(item.key)}
-                          disabled={milestones.length <= 1}
+                          onClick={() => removeStage(item.key)}
+                          disabled={stages.length <= 1}
                           aria-label={`删除第 ${index + 1} 阶段`}
                           className="mt-1 rounded-md p-1 text-yx-faint opacity-0 transition-all hover:bg-red-50 hover:text-red-500 focus:opacity-100 group-hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-20"
                         >
@@ -612,10 +596,10 @@ export function ProjectSetupGuideView({
                     </div>
                   ))}
 
-                  {milestones.length < 12 && (
+                  {stages.length < 12 && (
                     <button
                       type="button"
-                      onClick={addMilestone}
+                      onClick={addStage}
                       className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-yx-line py-3 text-xs font-semibold text-yx-muted transition-all hover:border-yx-brand/50 hover:bg-yx-brand/5 hover:text-yx-brand-hover"
                     >
                       <Plus className="h-3.5 w-3.5" />
@@ -703,13 +687,13 @@ export function ProjectSetupGuideView({
                     </div>
                   </div>
 
-                  {milestones.length > 0 && (
+                  {stages.length > 0 && (
                     <div className="border-t border-yx-line bg-yx-paper p-5">
                       <span className="text-[10px] font-bold uppercase tracking-wider text-yx-muted">
-                        规划推进阶段 ({milestones.length} 阶段)
+                        规划推进阶段 ({stages.length} 阶段)
                       </span>
                       <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
-                        {milestones.map((ms, idx) => (
+                        {stages.map((ms, idx) => (
                           <div
                             key={ms.key}
                             className="flex items-start gap-2.5 rounded-lg border border-yx-hover bg-yx-surface p-2.5 text-xs"
@@ -869,10 +853,10 @@ export function ProjectSetupGuideView({
               <div className="pt-2 border-t border-yx-hover">
                 <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wider text-yx-faint">
                   <span>推进路线图</span>
-                  <span className="text-yx-brand-hover font-bold">{milestones.length} 阶段</span>
+                  <span className="text-yx-brand-hover font-bold">{stages.length} 阶段</span>
                 </div>
                 <div className="mt-2 space-y-1.5">
-                  {milestones.slice(0, 4).map((ms) => (
+                  {stages.slice(0, 4).map((ms) => (
                     <div key={ms.key} className="flex items-center gap-2 text-[11px]">
                       <span className="h-1.5 w-1.5 rounded-full bg-yx-brand" />
                       <span className="truncate font-medium text-yx-ink flex-1">{ms.title}</span>
@@ -881,9 +865,9 @@ export function ProjectSetupGuideView({
                       </span>
                     </div>
                   ))}
-                  {milestones.length > 4 && (
+                  {stages.length > 4 && (
                     <div className="text-[10px] text-yx-faint pl-3.5">
-                      + 还有 {milestones.length - 4} 个阶段…
+                      + 还有 {stages.length - 4} 个阶段…
                     </div>
                   )}
                 </div>

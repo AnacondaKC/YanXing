@@ -170,7 +170,7 @@ test('production structured and text calls reach local HTTP endpoints and preser
       output: { name: 'local_output', description: 'Return a result', schema: { type: 'object' } },
     })
     assert.deepEqual(structured.value, { ok: true })
-    assert.equal(structured.usage.totalTokens, 5)
+    assert.equal('usage' in structured, false)
     const text = await runText({ ...input, outputLabel: 'local output' })
     assert.equal(text.content, '{"ok":true}')
     const received = requests.slice(firstRequest)

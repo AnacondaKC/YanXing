@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getRequestSession } from '@/lib/auth/request'
-import { getKnowledgeItem } from '@/lib/db/repository'
+import { getKnowledgeItem } from '@/lib/db/knowledge-repository'
 import { createReadStream } from 'node:fs'
 import { stat } from 'node:fs/promises'
 import { Readable } from 'node:stream'

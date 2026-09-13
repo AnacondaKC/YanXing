@@ -9,22 +9,19 @@ import {
   UserRound,
   Users,
 } from 'lucide-react'
-import type { ProjectWithCapabilities } from '@/modules/projects/domain'
+import type { WorkspaceProjectListItem } from '@/lib/workspace-submission'
 
 export type ProjectTabId = 'dashboard' | 'insight' | 'content' | 'history'
 
 interface ProjectExecutiveHeaderProps {
-  project: ProjectWithCapabilities
+  project: Pick<WorkspaceProjectListItem, 'title' | 'ownerName' | 'collaboratorNames' | 'updatedAt'> & { isExample?: boolean }
+  stagePositionLabel?: string
 }
 
 export function ProjectExecutiveHeader({
   project,
+  stagePositionLabel = '暂无阶段',
 }: ProjectExecutiveHeaderProps) {
-  const milestones = project.milestones ?? []
-  const activeStageIndex = milestones.findIndex((milestone) => milestone.status === 'in_progress' || milestone.status === 'at_risk')
-  const nextStageIndex = milestones.findIndex((milestone) => milestone.status !== 'completed')
-  const currentStageIndex = activeStageIndex >= 0 ? activeStageIndex : nextStageIndex >= 0 ? nextStageIndex : milestones.length - 1
-  const stagePositionLabel = milestones.length ? `阶段 ${Math.max(0, currentStageIndex) + 1}/${milestones.length}` : '暂无阶段'
 
   return (
     <div className="flex flex-col gap-3 sm:gap-4">
@@ -100,7 +97,7 @@ export function ProjectSideNav({
 
   return (
     <aside aria-label="课题模块外挂导航" className={`shrink-0 ${className ?? ''}`}>
-      <nav className="flex flex-row xl:flex-col gap-1 overflow-x-auto rounded-lg border border-yx-line bg-white/95 p-1 shadow-2xs backdrop-blur-xs">
+      <nav className="flex flex-row min-[1760px]:flex-col gap-1 overflow-x-auto rounded-lg border border-yx-line bg-white/95 p-1 shadow-2xs backdrop-blur-xs">
         {tabs.map((tab) => {
           const active = activeTab === tab.id
           const Icon = tab.icon

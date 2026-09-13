@@ -6,6 +6,7 @@ const nextConfig = {
   outputFileTracingExcludes: process.env.YANXING_STANDALONE === '1' ? {
     '/*': [
       './storage/**/*',
+      './storage-native/**/*',
       './.env*',
       './node_modules/**/tsx/**/*',
       './node_modules/**/esbuild/**/*',
@@ -30,7 +31,7 @@ const nextConfig = {
     if (!dev) return config
     config.watchOptions = {
       ...config.watchOptions,
-      ignored: ['**/node_modules/**', '**/.git/**', '**/.next/**', '**/.next-dev/**', '**/storage/**', '**/*.sqlite*', '**/*.log'],
+      ignored: ['**/node_modules/**', '**/.git/**', '**/.next/**', '**/.next-dev/**', '**/storage/**', '**/storage-native/**', '**/*.sqlite*', '**/*.log'],
     }
     return config
   },

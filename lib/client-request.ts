@@ -34,6 +34,10 @@ export async function apiFetch(input: RequestInfo | URL, init?: RequestInit) {
   return response
 }
 
+function requestOrigin() {
+  return typeof window === 'undefined' ? 'http://workspace.local' : window.location.origin
+}
+
 export async function fetchPage<T>(
   input: string | URL,
   collectionKey: string,
@@ -41,9 +45,10 @@ export async function fetchPage<T>(
   pageSize = 100,
   offset = 0,
 ): Promise<{ items: T[]; total: number; hasMore: boolean }> {
+  if (init.signal?.aborted) throw new DOMException('The operation was aborted.', 'AbortError')
   const safePageSize = Math.min(100, Math.max(1, Math.floor(pageSize)))
   const safeOffset = Math.max(0, Math.floor(offset))
-  const url = new URL(String(input), window.location.origin)
+  const url = new URL(String(input), requestOrigin())
   url.searchParams.set('limit', String(safePageSize))
   url.searchParams.set('offset', String(safeOffset))
   const response = await apiFetch(url, init)
@@ -52,7 +57,7 @@ export async function fetchPage<T>(
   const items = body && Array.isArray(body[collectionKey]) ? body[collectionKey] as T[] : undefined
   if (!items) throw new Error('列表响应格式无效。')
   const total = typeof body?.total === 'number' && Number.isSafeInteger(body.total) ? body.total : safeOffset + items.length
-  return { items, total, hasMore: body?.hasMore === true && safeOffset + items.length < total }
+  return { items, total, hasMore: body?.hasMore === true }
 }
 
 export async function fetchAllPages<T>(
@@ -65,10 +70,11 @@ export async function fetchAllPages<T>(
   let offset = 0
   let total = 0
   for (let page = 0; page < 100; page += 1) {
+    if (init.signal?.aborted) throw new DOMException('The operation was aborted.', 'AbortError')
     const result = await fetchPage<T>(input, collectionKey, init, pageSize, offset)
     items.push(...result.items)
     total = result.total
-    if (!result.hasMore || result.items.length === 0 || items.length >= total) return { items, total }
+    if (!result.hasMore || result.items.length === 0) return { items, total }
     offset += result.items.length
   }
   throw new Error('列表分页超过安全上限。')

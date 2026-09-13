@@ -116,6 +116,6 @@ test('migrate and app-manager load env after resolving mode and keep runtime get
       env: { ...process.env, NODE_ENV: 'development', YANXING_DATABASE_PATH: path.join(cwd, 'manager-dev.sqlite') },
     })
     assert.equal(migrate.status, 0, migrate.stderr)
-    assert.match(migrate.stdout, /数据库迁移完成/)
+    assert.match(migrate.stdout, /原生数据库已就绪：yanxing-native-p3/)
   })
 })

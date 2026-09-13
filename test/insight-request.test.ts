@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { readFileSync } from 'node:fs'
 
-import { isCurrentInsightRequest } from '../components/insight-workspace'
+import { canDispatchInsight } from '../components/insight-workspace'
 
 test('insight regeneration keeps its feedback beside the disabled refresh button', () => {
   const source = readFileSync(new URL('../components/insight-workspace.tsx', import.meta.url), 'utf8')
@@ -28,17 +28,10 @@ test('insight waiting dots animate opacity without layout shifts and respect red
   assert.match(dots, /animation: none/)
 })
 
-test('insight responses apply only to the captured report, hash, and generation', () => {
-  const current = {
-    requestReportId: 'report-a',
-    requestFileHash: 'hash-a',
-    requestGeneration: 2,
-    activeReportId: 'report-a',
-    activeFileHash: 'hash-a',
-    activeGeneration: 2,
-  }
-  assert.equal(isCurrentInsightRequest(current), true)
-  assert.equal(isCurrentInsightRequest({ ...current, activeReportId: 'report-b' }), false)
-  assert.equal(isCurrentInsightRequest({ ...current, activeFileHash: 'hash-b' }), false)
-  assert.equal(isCurrentInsightRequest({ ...current, activeGeneration: 3 }), false)
+test('insight dispatch never retries unknown or view-only outcomes automatically', () => {
+  const source = readFileSync(new URL('../components/insight-workspace.tsx', import.meta.url), 'utf8')
+  assert.doesNotMatch(source, /onGenerate\(\)|void generateInsight/)
+  assert.equal(canDispatchInsight('view'), false)
+  assert.equal(canDispatchInsight('none'), false)
+  assert.equal(canDispatchInsight('retry'), true)
 })

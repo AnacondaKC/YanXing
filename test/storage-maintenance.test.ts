@@ -3,9 +3,10 @@ import { DatabaseSync } from 'node:sqlite'
 import { mkdir, mkdtemp, rm, stat, utimes, writeFile } from 'node:fs/promises'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import test from 'node:test'
-import { initialSchemaSql } from '../lib/db/migrations/0001-initial-schema'
+import { ensureNativeDatabase, installFreshSharedSchema } from '../lib/db/native-schema'
+import { NativeSchemaError } from '../lib/db/native-schema-error'
 import { isPathWithinRoot } from '../lib/storage/path-containment'
 import { runStorageMaintenance } from '../lib/storage/maintenance'
 import { consumeStorageReservationInDatabase, StorageQuotaError } from '../lib/storage/quota'
@@ -14,8 +15,23 @@ const timestamp = '2026-01-02T03:04:05.000Z'
 
 function createDatabase() {
   const database = new DatabaseSync(':memory:')
-  database.exec(initialSchemaSql)
+  database.exec('PRAGMA foreign_keys = ON;')
+  installFreshSharedSchema(database)
   return database
+}
+
+function createNativeMaintenanceDatabase(reportRoot: string) {
+  const database = new DatabaseSync(':memory:')
+  database.exec('PRAGMA foreign_keys = ON;')
+  ensureNativeDatabase({ database, storageRoot: resolve(reportRoot) })
+  return database
+}
+
+function insertKnowledgeItem(database: DatabaseSync, input: { id: string; userId: string; fileName: string; sourcePath: string; content: string }) {
+  database.prepare(`
+    INSERT INTO knowledge_items(id, title, file_name, file_size, source_path, file_hash, uploaded_by, uploaded_by_user_id, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(input.id, input.id, input.fileName, Buffer.byteLength(input.content), input.sourcePath, 'hash-' + input.id, input.userId, input.userId, timestamp, timestamp)
 }
 
 async function createFile(filePath: string, content: string, mtime: Date) {
@@ -49,7 +65,7 @@ test('reconciles allocations, expires reservations, and preserves referenced fil
     temporaryRoot: join(directory, 'tmp'),
   }
   await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })))
-  const activePath = join(roots.reportRoot, 'report-live', 'report-live.pdf')
+  const activePath = join(roots.knowledgeRoot, 'knowledge-live', 'live.pdf')
   const orphanPath = join(roots.reportRoot, 'orphan', 'orphan.pdf')
   const recentPath = join(roots.knowledgeRoot, 'recent', 'recent.pdf')
   const oldDate = new Date(Date.parse(timestamp) - 24 * 60 * 60 * 1000)
@@ -60,9 +76,9 @@ test('reconciles allocations, expires reservations, and preserves referenced fil
 
   const database = createDatabase()
   database.prepare('INSERT INTO users(id, username, display_name, password_hash, role, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run('user-1', 'user-1', '测试用户', 'hash', 'researcher', timestamp, timestamp)
-  database.prepare('INSERT INTO projects(id, title, objective, owner_name, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run('project-1', '测试课题', '', '测试用户', 'not_started', timestamp, timestamp)
+  database.prepare('INSERT INTO projects(id, title, objective, owner_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').run('project-1', '测试课题', '', '测试用户', timestamp, timestamp)
   database.prepare('INSERT INTO project_members(project_id, user_id, role, created_at) VALUES (?, ?, ?, ?)').run('project-1', 'user-1', 'owner', timestamp)
-  database.prepare('INSERT INTO report_versions(id, project_id, version, title, file_name, file_hash, source_path, mime_type, source_size, parse_status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run('report-live', 'project-1', 1, 'Live', 'report-live.pdf', 'hash-live', activePath, 'application/pdf', Buffer.byteLength('active report'), 'uploaded', timestamp)
+  insertKnowledgeItem(database, { id: 'knowledge-live', userId: 'user-1', fileName: 'live.pdf', sourcePath: activePath, content: 'active report' })
   database.prepare('INSERT INTO storage_allocations(owner_type, owner_id, user_id, project_id, size_bytes, file_hash, source_path, mime_type, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run('report', 'report-gone', 'user-1', 'project-1', 12, 'hash-gone', orphanPath, 'application/pdf', timestamp, timestamp)
   database.prepare('INSERT INTO storage_reservations(id, user_id, project_id, expected_bytes, owner_type, expires_at, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run('reservation-expired', 'user-1', 'project-1', 99, 'report', '2026-01-01T00:00:00.000Z', 'active', timestamp, timestamp)
   database.prepare('INSERT INTO storage_usage(scope_type, scope_id, used_bytes, item_count, reserved_bytes, reserved_count, revision, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run('global', 'global', 999, 9, 99, 1, 4, timestamp)
@@ -72,21 +88,24 @@ test('reconciles allocations, expires reservations, and preserves referenced fil
   const result = await runStorageMaintenance({ database, roots, now: timestamp, orphanGraceMs: 0 })
   assert.equal(result.expiredReservations, 1)
   assert.equal(result.allocationsCreated, 1)
-  assert.equal(result.allocationsRemoved, 1)
-  assert.equal(result.orphanFilesDeleted, 1)
+  assert.equal(result.allocationsRemoved, 0)
+  assert.equal(result.orphanFilesDeleted, 0)
   assert.equal(result.orphanFilesSkippedRecent, 1)
   assert.equal(await exists(activePath), true)
-  assert.equal(await exists(orphanPath), false)
+  assert.equal(await exists(orphanPath), true)
   assert.equal(await exists(recentPath), true)
 
-  const allocation = database.prepare('SELECT user_id, project_id, size_bytes, source_path FROM storage_allocations WHERE owner_type = ? AND owner_id = ?').get('report', 'report-live') as { user_id: string; project_id: string; size_bytes: number; source_path: string }
+  const allocation = database.prepare('SELECT user_id, project_id, size_bytes, source_path FROM storage_allocations WHERE owner_type = ? AND owner_id = ?').get('knowledge', 'knowledge-live') as { user_id: string; project_id: string | null; size_bytes: number; source_path: string }
   assert.equal(allocation.user_id, 'user-1')
-  assert.equal(allocation.project_id, 'project-1')
+  assert.equal(allocation.project_id, null)
   assert.equal(allocation.size_bytes, Buffer.byteLength('active report'))
   assert.equal(allocation.source_path, activePath)
+  const retainedReport = database.prepare('SELECT user_id, size_bytes FROM storage_allocations WHERE owner_type = ? AND owner_id = ?').get('report', 'report-gone') as { user_id: string; size_bytes: number }
+  assert.equal(retainedReport.user_id, 'user-1')
+  assert.equal(retainedReport.size_bytes, 12)
   const globalUsage = database.prepare('SELECT used_bytes, item_count, reserved_bytes, reserved_count FROM storage_usage WHERE scope_type = ? AND scope_id = ?').get('global', 'global') as { used_bytes: number; item_count: number; reserved_bytes: number; reserved_count: number }
-  assert.equal(globalUsage.used_bytes, Buffer.byteLength('active report'))
-  assert.equal(globalUsage.item_count, 1)
+  assert.equal(globalUsage.used_bytes, Buffer.byteLength('active report') + 12)
+  assert.equal(globalUsage.item_count, 2)
   assert.equal(globalUsage.reserved_bytes, 0)
   assert.equal(globalUsage.reserved_count, 0)
   const reservation = database.prepare('SELECT state FROM storage_reservations WHERE id = ?').get('reservation-expired') as { state: string }
@@ -109,9 +128,8 @@ test('does not delete old files while an owner-type reservation is active', asyn
   database.prepare('INSERT INTO storage_reservations(id, user_id, project_id, expected_bytes, owner_type, expires_at, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run('reservation-active', 'user-2', 'project-2', 42, 'report', '2026-01-03T00:00:00.000Z', 'active', timestamp, timestamp)
 
   const result = await runStorageMaintenance({ database, roots, now: timestamp, orphanGraceMs: 0 })
-  assert.equal(result.orphanFilesFound, 1)
+  assert.equal(result.orphanFilesFound, 0)
   assert.equal(result.orphanFilesDeleted, 0)
-  assert.equal(result.orphanFilesSkippedActiveReservation, 1)
   assert.equal(await exists(orphanPath), true)
   const usage = database.prepare('SELECT reserved_bytes, reserved_count FROM storage_usage WHERE scope_type = ? AND scope_id = ?').get('user', 'user-2') as { reserved_bytes: number; reserved_count: number }
   assert.equal(usage.reserved_bytes, 42)
@@ -127,11 +145,13 @@ test('deletes cache-only extraction sidecars after the source is gone', async ()
     knowledgeRoot: join(directory, 'knowledge'),
     temporaryRoot: join(directory, 'tmp'),
   }
-  const sidecarPath = join(roots.reportRoot, 'old', 'missing.docx.content.json')
+  const sidecarPath = join(roots.knowledgeRoot, 'old', 'missing.docx.content.json')
   await createFile(sidecarPath, '{"text":"cached"}', new Date(Date.parse(timestamp) - 24 * 60 * 60 * 1000))
-  await mkdir(roots.knowledgeRoot, { recursive: true })
+  await mkdir(roots.reportRoot, { recursive: true })
   await mkdir(roots.temporaryRoot, { recursive: true })
   const database = createDatabase()
+
+  database.prepare("INSERT INTO storage_allocations VALUES ('knowledge','old','user',NULL,1,'hash',?,'text/plain',?,?)").run(join(roots.knowledgeRoot, 'old-record'), timestamp, timestamp)
 
   const result = await runStorageMaintenance({ database, roots, now: timestamp, orphanGraceMs: 0 })
   assert.equal(result.scannedFiles, 0)
@@ -156,9 +176,9 @@ test('keeps extraction sidecars while the source report is protected', async () 
   await createFile(sidecarPath, '{"text":"cached"}', new Date(Date.parse(timestamp) - 24 * 60 * 60 * 1000))
   const database = createDatabase()
   database.prepare('INSERT INTO users(id, username, display_name, password_hash, role, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run('user-sidecar', 'user-sidecar', '缓存用户', 'hash', 'researcher', timestamp, timestamp)
-  database.prepare('INSERT INTO projects(id, title, objective, owner_name, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run('project-sidecar', '缓存课题', '', '缓存用户', 'not_started', timestamp, timestamp)
+  database.prepare('INSERT INTO projects(id, title, objective, owner_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').run('project-sidecar', '缓存课题', '', '缓存用户', timestamp, timestamp)
   database.prepare('INSERT INTO project_members(project_id, user_id, role, created_at) VALUES (?, ?, ?, ?)').run('project-sidecar', 'user-sidecar', 'owner', timestamp)
-  database.prepare('INSERT INTO report_versions(id, project_id, version, title, file_name, file_hash, source_path, mime_type, source_size, parse_status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run('report-sidecar', 'project-sidecar', 1, 'Live', 'live.docx', 'hash-sidecar', sourcePath, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', Buffer.byteLength('live report'), 'uploaded', timestamp)
+  insertKnowledgeItem(database, { id: 'knowledge-sidecar', userId: 'user-sidecar', fileName: 'live.docx', sourcePath: sourcePath, content: 'live report' })
 
   const result = await runStorageMaintenance({ database, roots, now: timestamp, orphanGraceMs: 0 })
   assert.equal(result.orphanFilesDeleted, 0)
@@ -176,12 +196,14 @@ test('deletes an orphan source and its extraction sidecar together', async () =>
     temporaryRoot: join(directory, 'tmp'),
   }
   await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })))
-  const sourcePath = join(roots.reportRoot, 'orphan', 'orphan.docx')
+  const sourcePath = join(roots.knowledgeRoot, 'orphan', 'orphan.docx')
   const sidecarPath = `${sourcePath}.content.json`
   const oldDate = new Date(Date.parse(timestamp) - 24 * 60 * 60 * 1000)
   await createFile(sourcePath, 'orphan report', oldDate)
   await createFile(sidecarPath, '{"text":"cached"}', oldDate)
   const database = createDatabase()
+
+  database.prepare("INSERT INTO storage_allocations VALUES ('knowledge','old','user',NULL,1,'hash',?,'text/plain',?,?)").run(join(roots.knowledgeRoot, 'old-record'), timestamp, timestamp)
 
   const result = await runStorageMaintenance({ database, roots, now: timestamp, orphanGraceMs: 0 })
   assert.equal(result.orphanFilesDeleted, 2)
@@ -205,8 +227,8 @@ test('treats an unused missing root as empty and still reconciles other roots', 
 
   const result = await runStorageMaintenance({ database, roots, now: timestamp, orphanGraceMs: 0 })
   assert.equal(result.errors.length, 0)
-  assert.equal(result.orphanFilesDeleted, 1)
-  assert.equal(await exists(orphanPath), false)
+  assert.equal(result.orphanFilesDeleted, 0)
+  assert.equal(await exists(orphanPath), true)
   const usage = database.prepare('SELECT used_bytes FROM storage_usage WHERE scope_type = ? AND scope_id = ?').get('global', 'global') as { used_bytes: number }
   assert.equal(usage.used_bytes, 0)
   database.close()
@@ -268,12 +290,10 @@ test('rechecks a business source created after the directory scan', async () => 
     temporaryRoot: join(directory, 'tmp'),
   }
   await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })))
-  const livePath = join(roots.reportRoot, 'race-report', 'source.docx')
+  const livePath = join(roots.knowledgeRoot, 'race-knowledge', 'source.docx')
   const target = createDatabase()
   target.prepare('INSERT INTO users(id, username, display_name, password_hash, role, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run('race-user', 'race-user', '竞态用户', 'hash', 'researcher', timestamp, timestamp)
-  target.prepare('INSERT INTO projects(id, title, objective, owner_name, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run('race-project', '竞态课题', '', '竞态用户', 'not_started', timestamp, timestamp)
-  target.prepare('INSERT INTO project_members(project_id, user_id, role, created_at) VALUES (?, ?, ?, ?)').run('race-project', 'race-user', 'owner', timestamp)
-  target.prepare('INSERT INTO report_versions(id, project_id, version, title, file_name, file_hash, source_path, mime_type, source_size, parse_status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run('race-report', 'race-project', 1, 'Race', 'source.docx', 'race-hash', livePath, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 12, 'uploaded', timestamp)
+  insertKnowledgeItem(target, { id: 'race-knowledge', userId: 'race-user', fileName: 'source.docx', sourcePath: livePath, content: 'race upload' })
   let injected = false
   const database = new Proxy(target, {
     get(object, property, receiver) {
@@ -295,7 +315,7 @@ test('rechecks a business source created after the directory scan', async () => 
   const result = await runStorageMaintenance({ database, roots, now: timestamp, orphanGraceMs: 0 })
   assert.equal(injected, true)
   assert.equal(result.allocationsCreated, 1)
-  assert.equal((target.prepare("SELECT source_path FROM storage_allocations WHERE owner_type = 'report' AND owner_id = 'race-report'").get() as { source_path: string }).source_path, livePath)
+  assert.equal((target.prepare("SELECT source_path FROM storage_allocations WHERE owner_type = 'knowledge' AND owner_id = 'race-knowledge'").get() as { source_path: string }).source_path, livePath)
   assert.equal(await exists(livePath), true)
   target.close()
   await rm(directory, { recursive: true, force: true })
@@ -344,4 +364,157 @@ test('does not consume a reservation for a different owner type', () => {
   const reservation = database.prepare('SELECT state FROM storage_reservations WHERE id = ?').get('reservation-owner-type') as { state: string }
   assert.equal(reservation.state, 'active')
   database.close()
+})
+
+test('keeps tombstoned formal reports and bills immutable submitted_by', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'yanxing-storage-tombstone-'))
+  const roots = {
+    reportRoot: join(directory, 'reports'),
+    knowledgeRoot: join(directory, 'knowledge'),
+    temporaryRoot: join(directory, 'tmp'),
+  }
+  await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })))
+  const sourceKey = 'reports/tombstone.docx'
+  const sourcePath = join(roots.reportRoot, sourceKey)
+  const content = 'tombstone-report-body'
+  await createFile(sourcePath, content, new Date(Date.parse(timestamp) - 24 * 60 * 60 * 1000))
+  const database = createNativeMaintenanceDatabase(roots.reportRoot)
+  database.prepare('INSERT INTO users(id, username, display_name, password_hash, role, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run('submitter', 'submitter', '提交人', 'hash', 'researcher', timestamp, timestamp)
+  database.prepare('INSERT INTO users(id, username, display_name, password_hash, role, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run('owner', 'owner', '课题负责人', 'hash', 'researcher', timestamp, timestamp)
+  database.prepare('INSERT INTO projects(id, title, objective, owner_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').run('project-native', '原生课题', '目标', '课题负责人', timestamp, timestamp)
+  database.prepare('INSERT INTO project_members(project_id, user_id, role, created_at) VALUES (?, ?, ?, ?)').run('project-native', 'owner', 'owner', timestamp)
+  database.prepare('INSERT INTO project_members(project_id, user_id, role, created_at) VALUES (?, ?, ?, ?)').run('project-native', 'submitter', 'editor', timestamp)
+  database.prepare('INSERT INTO project_report_state(project_id, plan_revision, workflow_revision, next_submission_sequence) VALUES (?, ?, ?, ?)').run('project-native', 0, 0, 2)
+  database.prepare('INSERT INTO project_stages(id, project_id, ordinal, title, lifecycle_status, started_at, next_report_version, state_revision, completion_revision) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run('stage-1', 'project-native', 1, '研究阶段', 'in_progress', timestamp, 2, 0, 0)
+  database.prepare(`INSERT INTO report_submissions(id, project_id, stage_id, stage_version, submission_sequence, submitted_as, title, file_name, source_key, file_hash, source_size, paragraph_count, character_count, submitted_by, submitted_at, was_first_stage_submission, deleted_at, deleted_by, deletion_reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    'report-tombstone', 'project-native', 'stage-1', 1, 1, 'update', '墓碑报告', 'tombstone.docx', sourceKey, 'hash-tombstone', Buffer.byteLength(content), 1, content.length, 'submitter', timestamp, 1, '2026-01-02T04:00:00.000Z', 'owner', '逻辑删除保留文件',
+  )
+  database.prepare('INSERT INTO report_submission_documents(report_id, text, mime_type) VALUES (?, ?, ?)').run('report-tombstone', content, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+
+  const result = await runStorageMaintenance({ database, roots, now: timestamp, orphanGraceMs: 0 })
+  assert.equal(result.orphanFilesDeleted, 0)
+  assert.equal(await exists(sourcePath), true)
+  const allocation = database.prepare('SELECT user_id, project_id, size_bytes, source_path FROM storage_allocations WHERE owner_type = ? AND owner_id = ?').get('report', 'report-tombstone') as { user_id: string; project_id: string; size_bytes: number; source_path: string }
+  assert.equal(allocation.user_id, 'submitter')
+  assert.equal(allocation.project_id, 'project-native')
+  assert.equal(allocation.size_bytes, Buffer.byteLength(content))
+  assert.equal(allocation.source_path, resolve(sourcePath))
+  const usage = database.prepare('SELECT used_bytes, item_count FROM storage_usage WHERE scope_type = ? AND scope_id = ?').get('user', 'submitter') as { used_bytes: number; item_count: number }
+  assert.equal(usage.used_bytes, Buffer.byteLength(content))
+  assert.equal(usage.item_count, 1)
+  const ownerUsage = database.prepare('SELECT used_bytes FROM storage_usage WHERE scope_type = ? AND scope_id = ?').get('user', 'owner') as { used_bytes: number } | undefined
+  assert.equal(ownerUsage?.used_bytes ?? 0, 0)
+  database.close()
+  await rm(directory, { recursive: true, force: true })
+})
+
+test('keeps unknown formal-root files and does not invent report usage', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'yanxing-storage-unknown-formal-'))
+  const roots = {
+    reportRoot: join(directory, 'reports'),
+    knowledgeRoot: join(directory, 'knowledge'),
+    temporaryRoot: join(directory, 'tmp'),
+  }
+  await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })))
+  const unknownPath = join(roots.reportRoot, 'quarantine', 'unknown.pdf')
+  await createFile(unknownPath, 'unknown formal', new Date(Date.parse(timestamp) - 24 * 60 * 60 * 1000))
+  const database = createNativeMaintenanceDatabase(roots.reportRoot)
+
+  const result = await runStorageMaintenance({ database, roots, now: timestamp, orphanGraceMs: 0 })
+  assert.equal(result.orphanFilesDeleted, 0)
+  assert.equal(result.allocationsCreated, 0)
+  assert.equal(await exists(unknownPath), true)
+  assert.equal(database.prepare("SELECT COUNT(*) AS count FROM storage_allocations WHERE owner_type = 'report'").get()?.count, 0)
+  const usage = database.prepare('SELECT used_bytes, item_count FROM storage_usage WHERE scope_type = ? AND scope_id = ?').get('global', 'global') as { used_bytes: number; item_count: number } | undefined
+  assert.equal(usage?.used_bytes ?? 0, 0)
+  assert.equal(usage?.item_count ?? 0, 0)
+  database.close()
+  await rm(directory, { recursive: true, force: true })
+})
+
+test('native known knowledge permits orphan cleanup but active reservations still protect candidates', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'yanxing-storage-known-'))
+  const roots = { reportRoot: join(directory, 'reports'), knowledgeRoot: join(directory, 'knowledge'), temporaryRoot: join(directory, 'tmp') }
+  await Promise.all(Object.values(roots).map((root) => mkdir(root)))
+  const database = createNativeMaintenanceDatabase(roots.reportRoot)
+  try {
+    const known = join(roots.knowledgeRoot, 'known.pdf')
+    const orphan = join(roots.knowledgeRoot, 'orphan.pdf')
+    const old = new Date(Date.parse(timestamp) - 86400000)
+    for (const file of [known, orphan]) await createFile(file, 'data', old)
+    database.prepare("INSERT INTO users(id,username,display_name,password_hash,role,created_at,updated_at) VALUES ('user','user','User','hash','researcher',?,?)").run(timestamp, timestamp)
+    insertKnowledgeItem(database, { id: 'known', userId: 'user', fileName: 'known.pdf', sourcePath: known, content: 'data' })
+    database.prepare("INSERT INTO storage_reservations(id,user_id,expected_bytes,owner_type,expires_at,state,created_at,updated_at) VALUES ('active','user',4,'knowledge','2026-01-03T00:00:00.000Z','active',?,?)").run(timestamp, timestamp)
+    const held = await runStorageMaintenance({ database, roots, now: timestamp })
+    assert.deepEqual(held.errors, [])
+    assert.equal(held.orphanFilesSkippedActiveReservation, 1)
+    assert.equal(await exists(orphan), true)
+    database.exec("UPDATE storage_reservations SET state='released' WHERE id='active'")
+    const cleaned = await runStorageMaintenance({ database, roots, now: timestamp })
+    assert.deepEqual(cleaned.errors, [])
+    assert.equal(cleaned.orphanFilesDeleted, 1)
+    assert.equal(await exists(known), true)
+    assert.equal(await exists(orphan), false)
+  } finally { database.close(); await rm(directory, { recursive: true, force: true }) }
+})
+
+for (const dryRun of [true, false]) {
+  test('empty native knowledge ledger refuses ambiguous orphan deletion, dryRun=' + dryRun, async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'yanxing-storage-wrong-knowledge-'))
+    const roots = { reportRoot: join(directory, 'reports'), knowledgeRoot: join(directory, 'wrong-knowledge'), temporaryRoot: join(directory, 'tmp') }
+    await Promise.all(Object.values(roots).map((root) => mkdir(root)))
+    const database = createNativeMaintenanceDatabase(roots.reportRoot)
+    try {
+      const old = new Date(Date.parse(timestamp) - 86400000)
+      const source = join(roots.knowledgeRoot, 'old.pdf')
+      const cache = join(roots.knowledgeRoot, 'missing.pdf.content.json')
+      const temporary = join(roots.temporaryRoot, 'old.upload')
+      const recent = join(roots.knowledgeRoot, 'recent.pdf')
+      for (const file of [source, cache, temporary]) await createFile(file, 'keep', old)
+      await createFile(recent, 'recent', new Date(timestamp))
+      const result = await runStorageMaintenance({ database, roots, now: timestamp, dryRun })
+      assert.equal(result.errors.length, 1)
+      assert.equal(result.errors[0].path, roots.knowledgeRoot)
+      assert.match(result.errors[0].message, /无法确认知识目录归属/)
+      for (const file of [source, cache, recent]) assert.equal(await exists(file), true)
+      assert.equal(await exists(temporary), dryRun)
+      assert.equal(result.orphanFilesDeleted, dryRun ? 0 : 1)
+      assert.equal(result.orphanFilesSkippedRecent, dryRun ? 0 : 1)
+    } finally { database.close(); await rm(directory, { recursive: true, force: true }) }
+  })
+}
+
+test('bare empty sqlite still fails on missing maintenance tables without deleting files', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'yanxing-storage-bare-'))
+  const roots = { reportRoot: join(directory, 'reports'), knowledgeRoot: join(directory, 'knowledge'), temporaryRoot: join(directory, 'tmp') }
+  await Promise.all(Object.values(roots).map((root) => mkdir(root)))
+  const database = new DatabaseSync(':memory:')
+  try {
+    const source = join(roots.knowledgeRoot, 'old.pdf')
+    await createFile(source, 'keep', new Date(Date.parse(timestamp) - 86400000))
+    await assert.rejects(runStorageMaintenance({ database, roots, now: timestamp }), /no such table/)
+    assert.equal(await exists(source), true)
+  } finally { database.close(); await rm(directory, { recursive: true, force: true }) }
+})
+
+test('refuses a legacy report_versions database without writing', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'yanxing-storage-legacy-refuse-'))
+  const roots = {
+    reportRoot: join(directory, 'reports'),
+    knowledgeRoot: join(directory, 'knowledge'),
+    temporaryRoot: join(directory, 'tmp'),
+  }
+  await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })))
+  const database = new DatabaseSync(':memory:')
+  database.exec("CREATE TABLE users(id TEXT PRIMARY KEY, username TEXT NOT NULL); CREATE TABLE report_versions(id TEXT PRIMARY KEY);")
+  database.exec("INSERT INTO users(id, username) VALUES ('user-legacy', 'user-legacy')")
+  await assert.rejects(
+    () => runStorageMaintenance({ database, roots, now: timestamp, orphanGraceMs: 0 }),
+    (error: unknown) => error instanceof NativeSchemaError && error.code === 'LEGACY_DATABASE',
+  )
+  const user = database.prepare("SELECT username FROM users WHERE id = 'user-legacy'").get() as { username: string }
+  assert.equal(user.username, 'user-legacy')
+  assert.equal(database.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'native_schema_identity'").get(), undefined)
+  database.close()
+  await rm(directory, { recursive: true, force: true })
 })

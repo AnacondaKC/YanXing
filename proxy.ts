@@ -10,6 +10,8 @@ import {
 import { checkRateLimit } from '@/lib/security/rate-limit'
 import { rateLimitFailure } from '@/lib/http/rate-limit-response'
 import { runtimeConfig } from '@/lib/config/environment'
+import { getDatabase } from '@/lib/db/client'
+import { isNativeSchemaError, publicNativeSchemaFailure } from '@/lib/db/native-schema-error'
 
 const publicPaths = new Set(['/login', '/api/auth/login', '/api/branding'])
 const publicPathPrefixes = ['/api/branding/assets/']
@@ -36,6 +38,22 @@ function securedJson(body: unknown, init?: ResponseInit) {
 }
 
 export function proxy(request: NextRequest) {
+  try {
+    if (request.nextUrl.pathname !== '/api/health') getDatabase()
+    return authorizeRequest(request)
+  } catch (error) {
+    if (!isNativeSchemaError(error)) {
+      return securedJson({error:'服务暂时不可用，请稍后再试。',code:'SERVICE_UNAVAILABLE'}, {status:503,headers:{'Retry-After':'5','Cache-Control':'no-store'}})
+    }
+    if (request.nextUrl.pathname.startsWith('/api/')) {
+      return securedJson(publicNativeSchemaFailure(error), {status:503,headers:{'Cache-Control':'no-store'}})
+    }
+    const body = '<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>研行 · 需要新项目运行目录</title><main><h1>需要新项目运行目录</h1><p>'+error.message+'</p><p>原数据库和文件不会被迁移、清空或覆盖。请由管理员按部署说明配置独立的新目录后启动服务。</p></main></html>'
+    return secured(new NextResponse(body,{status:503,headers:{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','Content-Security-Policy':"default-src 'none'; frame-ancestors 'none'"}}))
+  }
+}
+
+function authorizeRequest(request: NextRequest) {
   const path = request.nextUrl.pathname
   const isApi = path.startsWith('/api/')
 
@@ -84,7 +102,7 @@ export function proxy(request: NextRequest) {
       return securedJson({ error: 'CSRF 校验失败。' }, { status: 403 })
     }
 
-    const rule = mutationRateLimitForPath(path, request.method)
+    const rule = mutationRateLimitForPath(path)
     const decision = checkRateLimit(`mutation:${session.user.id}:${rule.key}`, rule)
     const limited = rateLimitFailure(decision, { error: '操作过于频繁，请稍后再试。', retryAfterSeconds: decision.retryAfterSeconds })
     if (limited) return securedJson(limited.body, { status: limited.status, headers: limited.headers })
@@ -99,14 +117,13 @@ function isPublicPath(path: string) {
   return publicPaths.has(path) || publicPathPrefixes.some((prefix) => path.startsWith(prefix))
 }
 
-function mutationRateLimitForPath(path: string, method: string) {
-  if (/^\/api\/projects\/[^/]+\/reports$/.test(path)) return uploadRateLimit
+function mutationRateLimitForPath(path: string) {
+  if (/^\/api\/projects\/[^/]+\/report-uploads$/.test(path)) return uploadRateLimit
+  if (/^\/api\/projects\/[^/]+\/reports$/.test(path)) return { ...uploadRateLimit, key: 'report-confirmation' }
+  if (/^\/api\/jobs\/[^/]+\/retry$/.test(path)) return { ...insightRateLimit, key: 'task-retry' }
   if (/^\/api\/knowledge$/.test(path)) return knowledgeUploadRateLimit
   if (/^\/api\/reports\/[^/]+\/insight$/.test(path)) return insightRateLimit
-  if (
-    (method === 'PUT' && /^\/api\/reports\/[^/]+$/.test(path))
-    || /^\/api\/reports\/[^/]+\/analyze$/.test(path)
-  ) {
+  if (/^\/api\/reports\/[^/]+\/analyze$/.test(path)) {
     return analysisRateLimit
   }
   return defaultMutationRateLimit

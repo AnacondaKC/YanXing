@@ -1,10 +1,11 @@
-import { dirname, join, resolve } from 'node:path'
+import { dirname, resolve } from 'node:path'
 import { runtimeConfig } from '@/lib/config/environment'
 import { isPathWithinRoot } from '@/lib/storage/path-containment'
+import { getDefaultKnowledgeStorageRoot } from '@/lib/storage/runtime-roots'
 
 export function getKnowledgeStorageRoot() {
   const configured = runtimeConfig.knowledgeStorageRoot
-  return resolve(configured || join(process.cwd(), 'storage', 'knowledge'))
+  return configured ? resolve(configured) : getDefaultKnowledgeStorageRoot()
 }
 
 export function isManagedKnowledgePath(sourcePath: string) {

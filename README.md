@@ -50,12 +50,12 @@ AI 驱动的产业政策研究工作台<br />
 | **🤖 结构化 AI 分析** | 生成结构化分析结果，校验输出格式，展示任务进度；支持失败重试与结果快照。 |
 | **💡 课题洞察** | 围绕课题汇总研究材料与分析结果，生成带标题、摘要与章节结构的洞察文稿，辅助梳理研究方向。 |
 | **📊 研究可视化** | 使用词云、思维导图与热力图，呈现报告中的主题与结构。 |
-| **🗂️ 课题与阶段管理** | 管理课题负责人、成员、里程碑预设、阶段交付物与进度。 |
+| **🗂️ 课题与阶段管理** | 管理课题负责人、协作者、有序阶段计划、阶段内多次完整提交与进度。 |
 | **📚 团队知识库** | 集中归档参考资料，为团队积累可持续维护的研究资料库。 |
 | **👥 账号与权限** | 区分管理员与研究员角色；启用账号可查看全部课题，非课题成员只读，成员按权限编辑。 |
-| **⚙️ 模型与预算管理** | 配置模型渠道，设置单用户每日 / 七日 Token 预算与多级任务队列限制。 |
+| **⚙️ 模型管理** | 配置模型渠道、模型选择与提示词，并通过多级任务队列限制控制并发。 |
 | **🔔 后台任务与通知** | 独立 Worker 执行分析和洞察任务，通过 SSE 推送任务事件，并提供站内通知。 |
-| **🎨 品牌与主题** | 自定义品牌标志、登录水印和品牌文案，支持明暗主题切换。 |
+| **🎨 品牌与界面** | 自定义品牌标志、登录水印和品牌文案，使用统一的浅色工作界面。 |
 
 ## 界面预览
 
@@ -145,77 +145,58 @@ pnpm status
 
 打开 **<http://127.0.0.1:3000>**，使用默认用户名 `admin` 和刚刚设置的密码登录。
 
-- `user:create` 会执行数据库迁移，支持 `--username`、`--display-name` 和 `--role` 参数。
+- `user:create` 会初始化空库或校验原生结构（旧库拒绝，不迁移），支持 `--username`、`--display-name` 和 `--role` 参数。
 - 该命令会**创建或更新同名账号**，并使已有会话失效，不要将它作为每次启动的固定步骤。
-- `pnpm dev` 由应用管理器在后台启动 Web 和 Worker，并在需要时执行迁移；使用 `pnpm stop` 停止。
+- `pnpm dev` 由应用管理器在后台启动 Web 和 Worker，并在空库时做原生初始化；现有旧库会失败关闭。使用 `pnpm stop` 停止。不要对正在验收的业务库做删除或改写。
 - 日志默认位于 `storage/logs/`。首次使用可先建立课题、上传报告，再运行 AI 分析并查看洞察。
 
 ## 生产部署
 
-### Docker Compose · 推荐自托管方式
+当前采用**课题 → 阶段 → 不可变报告提交**原生模型。**新项目，不做旧库迁移、历史兼容或双模运行。** 旧库/混合库启动会明确拒绝；不要把新镜像指向现有旧卷，不要清空旧数据绕过检查。
 
-宿主机只需 Docker Engine 和 Docker Compose v2（建议 2.24+），无需安装 Node.js 或 pnpm。Compose **只有一个 `app` 服务**：默认入口启动 supervisor，由它先迁移再同时管理 Web 与 Worker。以下步骤用于**全新数据部署**；已有多容器（`web` / `worker` / `migrate`）部署须先用旧 Compose 备份并 `docker compose down`（不要加 `-v`），详见部署指南。
+P5 本轮按用户确认只做隔离验收，**未切换正式实例、未推送正式镜像**。已有版本号或 GHCR 标签不能证明包含本轮原生实现。验收范围、发布候选和恢复操作见 [P5 发布验收记录](docs/project-stage-report-p5-acceptance.md)。
 
-GitHub 在 Release **发布（`published`）** 后，由 [镜像发布工作流](.github/workflows/docker-release.yml) 先以 `workflow_call` 调用 [CI](.github/workflows/ci.yml)（代码检查 / 测试 / 构建与 Docker 部署冒烟均须通过），再构建 `linux/amd64` 镜像，使用 `GITHUB_TOKEN` 推送到 `ghcr.io/anacondakc/yanxing`。镜像打上该 Release 对应的 Git 标签；仅当该 Release **未**标记为预发布时，才会同时更新 `latest`。`latest` 表示最近一次成功的稳定版发布，不是按 semver 比较得到的最高版本。该工作流没有 `workflow_dispatch`。镜像是否可用，以对应 Release 的 Actions 成功结果和 Packages 标签为准。GHCR 包默认私有，公开拉取需在 GitHub Packages 另行设置可见性。
+### Docker Compose
 
-**`v0.1.2` 是首个单容器版本**，对应镜像 `ghcr.io/anacondakc/yanxing:v0.1.2`。已发布的 `v0.1.1` / `v0.1.0` 仍是多容器旧镜像，不能与现在的单容器 `compose.yaml` 搭配。**不要假定 `latest` 已经是新布局**：`latest` 只在一次成功的非预发布稳定版发布后才会更新；在确认 `v0.1.2` 的 Actions 与 Packages 标签之前，`latest` 仍可能指向多容器的 `v0.1.1`。
+使用匹配的原生镜像与 Compose，单个 app 服务由 supervisor 管理 Web/Worker。正式部署前明确新项目名、新数据卷、域名/端口和稳定密钥；以下仅为未来新部署示例，本轮没有执行。
 
-GitHub Release **发布（`published`）之后**，须等待对应 Actions 的 CI、Docker 部署冒烟与镜像推送**全部成功**，并在 GitHub Packages 上确认 `v0.1.2` 标签可用，才能 `docker compose pull`。发布前或流水线尚未完成时，请用当前代码本地构建（默认 `yanxing:local`）。预构建镜像的上传上限构建参数为 `26214400`，须与运行时 `REPORT_MAX_UPLOAD_BYTES` 一致；自定义上限需自行构建。
 
-先准备环境文件：
-
-```bash
-cp .env.example .env
-chmod 600 .env
-
-# 生成一次，并将结果保存为 .env 中的 YANXING_SETTINGS_ENCRYPTION_KEY
-openssl rand -hex 32
-# 编辑 .env：填入上述固定密钥，并按需配置模型渠道。不要把密钥提交进仓库。
-```
-
-**本地构建**（发布前、流水线进行中，或 Packages 尚不能确认 `v0.1.2` 时仍推荐；也适用于自定义上传上限或目标平台不是 `linux/amd64`）：
+env 文件使用独立名称，避免覆盖当前配置：
 
 ```bash
-docker compose config --quiet
-docker compose up -d --build --wait --wait-timeout 180
-docker compose ps -a
+# .env.native 已存在时不要覆盖，先核对配置。
+test ! -e .env.native && cp .env.example .env.native
+chmod 600 .env.native
+# 编辑 .env.native：保存一次性生成的固定 YANXING_SETTINGS_ENCRYPTION_KEY；
+# 设置新的 YANXING_IMAGE 标签、确认端口，并配置模型渠道。
+export YANXING_ENV_FILE=.env.native
+docker compose --env-file .env.native -p yanxing-native config --quiet
+# 确认 yanxing-native_data 是本次新卷，且目标端口没有被现有实例占用后：
+docker compose --env-file .env.native -p yanxing-native up -d --build --wait --wait-timeout 180
 ```
 
-`app` 共享默认上限 `YANXING_MEMORY=4g`、`YANXING_CPUS=4`、`pids_limit=512`（合并不节省内存）。Worker 默认并发 3 个任务，可配置为 1～3。单机 SQLite 不要扩容容器。旧多容器的 `YANXING_WEB_MEMORY` / `YANXING_WORKER_MEMORY` 及对应 CPU 限制应改为上述共享上限。
-
-**从 GHCR 拉取**仅在 `v0.1.2` Release 的 Actions（CI / Docker 冒烟 / 镜像发布）全部成功、且 Packages 上 `v0.1.2` 标签已可用之后：在 `.env` 设置 `YANXING_IMAGE=ghcr.io/anacondakc/yanxing:v0.1.2`（不要使用多容器的 `v0.1.1`；不要假定 `latest` 已经是单容器布局；包仍为私有时先 `docker login ghcr.io`）。然后 `docker compose pull` 与 `docker compose up -d --no-build --wait --wait-timeout 180`。建议加上 `--no-build`，以免 Compose 在本地缺镜像时触发构建。
-
-创建管理员（容器健康后，在正在运行的 `app` 上执行）：
+创建管理员（只对上述新实例）：
 
 ```bash
 read -rsp "管理员密码: " YANXING_ADMIN_PASSWORD; echo
 export YANXING_ADMIN_PASSWORD
-docker compose exec -e YANXING_ADMIN_PASSWORD app /app/scripts/docker-entrypoint.sh user:create
+docker compose --env-file .env.native -p yanxing-native exec -e YANXING_ADMIN_PASSWORD app /app/scripts/docker-entrypoint.sh user:create
 unset YANXING_ADMIN_PASSWORD
 ```
 
-> [!IMPORTANT]
-> 默认仅绑定宿主机 `127.0.0.1:3000`。正式登录入口必须配置 **HTTPS 反向代理**，生产认证使用 Secure Cookie。加密密钥生成后应妥善保存，不要在重启或升级时重新生成。
+正式登录须通过 HTTPS；默认仅绑定 127.0.0.1:3000。生产应钉选经本轮原生验收的确切镜像 digest，不使用不明 latest，也不覆盖已有回退镜像标签。共享默认上限为 4 GiB/4 CPU，Worker 并发 1～3；SQLite 不支持多主机共享或 scale app=2。
 
-**[阅读完整 Docker 部署指南 →](docs/docker-deployment.md)**，包括从多容器升级、GHCR 标签与包可见性、HTTPS、旧数据迁入、备份恢复、联合健康检查、资源限制与 `docker run` 示例。
+普通停机使用 stop 或不带 -v 的 down；**不要删除数据卷**。完整配置、HTTPS 和密钥保管见 [Docker 部署指南](docs/docker-deployment.md)。
 
-> [!WARNING]
-> 普通停机使用 `docker compose stop` 或 `docker compose down`。**不要添加 `-v`**：`docker compose down -v` 会删除持久化数据卷。从旧版多容器切换过来时，也必须先用旧 Compose `down`（无 `-v`），以免孤儿 Worker 继续执行任务。
+### Node.js
 
-### Node.js · 直接部署
+先明确全新的绝对运行目录，并通过 YANXING_DATABASE_PATH 指定其中的 SQLite；配置并保管固定 YANXING_SETTINGS_ENCRYPTION_KEY。不要复用当前旧 storage/，不要在现有实例未确认停机时运行 restart。
 
-完成上面的依赖安装、环境配置和管理员创建后：
+构建使用 pnpm build:runtime 与 pnpm build；启动入口仍为 pnpm start，状态查看为 pnpm status。首次原生初始化命令仍叫 db:migrate，但只初始化空库或校验已有原生库，不迁移旧模型。
 
-```bash
-pnpm stop           # 若正在运行开发环境，先停止
-pnpm build
-pnpm start          # 生产模式：Web + Worker
-pnpm status
-```
+### 同模型备份与恢复
 
-生产环境同样需要 HTTPS 和固定的 `YANXING_SETTINGS_ENCRYPTION_KEY`。可用 `YANXING_PORT` 调整应用端口；仅在确认可信代理边界后设置 `YANXING_TRUST_PROXY`。
-
-默认数据库、上传文件和日志位于 `storage/`；若调整了数据库或知识库存储路径，也需备份相应目录。备份应包含数据及加密密钥，并在停写或一致性快照条件下进行，详见部署指南。
+使用 pnpm backup:native --help 查看显式路径命令。原生备份包括 SQLite 一致性快照、正式/墓碑报告文件、知识资料、审计及加密设置；**主密钥另行保管，不放入归档**。恢复须使用同一 schema、同一绑定路径和同一密钥，不覆盖现有数据，不以旧模型降级代替恢复。
 
 ## 技术架构
 
@@ -247,7 +228,7 @@ components/         工作台、管理端与 UI 基础组件
 modules/            课题、报告、分析、洞察等领域模块
 lib/                配置、数据库、模型接入、存储与安全基础设施
 worker/             分析与洞察任务执行器
-scripts/            进程管理、数据迁移、用户创建与测试脚本
+scripts/            进程管理、原生库初始化/校验、用户创建与测试脚本
 docs/               部署文档与界面截图
 test/               自动化测试
 public/             品牌与静态资源
@@ -263,7 +244,7 @@ storage/            本地运行数据，不纳入版本管理
 | `pnpm dev` / `pnpm start` | 开发 / 生产模式启动 Web 与 Worker |
 | `pnpm stop` / `pnpm restart` / `pnpm status` | 停止、重启与查看进程状态 |
 | `pnpm build` | 构建生产版本 |
-| `pnpm db:migrate` | 手动执行数据库迁移与校验 |
+| `pnpm db:migrate` | 初始化空库或校验原生结构（旧库拒绝，不迁移） |
 | `pnpm user:create` | 创建或更新用户 |
 | `pnpm storage:reconcile` | 存储对账与维护 |
 | `pnpm typecheck` | TypeScript 类型检查 |
@@ -292,7 +273,7 @@ storage/            本地运行数据，不纳入版本管理
 <details>
 <summary><strong>为什么上传后任务一直等待？</strong></summary>
 
-先确认 Worker 正在运行：本地部署执行 `pnpm status`，Docker 部署执行 `docker compose ps -a`（联合健康检查要求 Web 与 Worker 都通过）。再检查 `app` 日志、模型渠道、Token 预算及队列容量。Web 能打开不代表后台任务执行器已经就绪。
+先确认 Worker 正在运行：本地部署执行 `pnpm status`，Docker 部署执行 `docker compose ps -a`（联合健康检查要求 Web 与 Worker 都通过）。再检查 `app` 日志、模型渠道及队列容量。Web 能打开不代表后台任务执行器已经就绪。
 
 </details>
 

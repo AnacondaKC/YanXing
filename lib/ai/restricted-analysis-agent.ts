@@ -2,7 +2,6 @@ import type { TSchema } from 'typebox'
 import { buildBudgetedDocumentPrompt, createAnalysisPromptPlan, pageAnalysisOutputDefinition } from '@/lib/ai/prompt-budget'
 import { getMaxContextCharacters } from '@/lib/ai/runtime/output-protocol'
 import { runStructuredJson } from '@/lib/ai/execute'
-import { accountModelTokens } from '@/lib/ai/usage'
 import type { ModelRuntime } from '@/lib/ai/model-router'
 import type { AnalysisModuleId, AnalysisPromptConfig } from '@/modules/contracts/analysis'
 
@@ -22,7 +21,6 @@ export interface StructuredModuleAgentResult {
   payload: unknown
   provider: string
   model: string
-  tokens: number
 }
 
 export async function runAnalysisModuleAgent(input: StructuredModuleAgentInput): Promise<StructuredModuleAgentResult> {
@@ -39,11 +37,9 @@ export async function runAnalysisModuleAgent(input: StructuredModuleAgentInput):
     onCallStarted: () => input.onCallStarted?.({ provider: model.provider, model: model.id, module: input.moduleId, attempt: input.attempt }),
   })
 
-  const usage = accountModelTokens(result.usage)
   return {
     payload: result.value,
     provider: model.provider,
     model: model.id,
-    tokens: usage.totalTokens,
   }
 }

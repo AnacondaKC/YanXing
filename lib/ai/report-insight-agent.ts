@@ -1,9 +1,7 @@
-import { extractCachedDocumentText } from '@/lib/documents/document-parser'
 import { buildBudgetedDocumentPrompt, createAnalysisPromptPlan } from '@/lib/ai/prompt-budget'
 import { getMaxContextCharacters } from '@/lib/ai/runtime/output-protocol'
 import { runText } from '@/lib/ai/execute'
-import { ChatCompletionsError, withCompletedUsage } from '@/lib/ai/runtime/errors'
-import { accountModelTokens } from '@/lib/ai/usage'
+import { ChatCompletionsError, withCompletedCall } from '@/lib/ai/runtime/errors'
 import { createModelRuntime, type ModelRuntime } from '@/lib/ai/model-router'
 import type { AnalysisPromptConfig } from '@/modules/contracts/analysis'
 import type { ReportInsightOutput } from '@/modules/insights/domain'
@@ -19,16 +17,17 @@ const maxInsightSummaryCharacters = 500
 
 export async function runReportInsightAgent(input: {
   promptConfig: AnalysisPromptConfig
-  file: { path: string }
+  documentText?: string
   signal?: AbortSignal
   onCallStarted?: (details: { provider: string; model: string; stage?: string; module?: string }) => void | PromiseLike<void>
-  onCallCompleted?: (details: { provider: string; model: string; tokens: number }) => void | PromiseLike<void>
+  onCallCompleted?: (details: { provider: string; model: string }) => void | PromiseLike<void>
   runtime?: ModelRuntime
 }) {
   const runtime = input.runtime ?? createModelRuntime('report_insight')
   const model = { ...runtime.primary, maxContextCharacters: getMaxContextCharacters(runtime.primary.maxContextCharacters ?? runtime.maxContextCharacters) }
   const plan = createAnalysisPromptPlan({ target: 'report_insight', systemPrompt: input.promptConfig.systemPrompt, taskPrompt: input.promptConfig.instructionPrompt, maxContextCharacters: model.maxContextCharacters, modelLabel: model.id })
-  const documentText = (await extractCachedDocumentText(input.file.path, input.signal)).text
+  const documentText = input.documentText
+  if (!documentText) throw new Error('报告正文不存在，无法提交给 AI。')
   const prompt = buildBudgetedDocumentPrompt(plan, documentText)
   const result = await runText({
     model,
@@ -40,11 +39,9 @@ export async function runReportInsightAgent(input: {
     signal: input.signal,
     onCallStarted: () => input.onCallStarted?.({ provider: model.provider, model: model.id, stage: 'report_insight', module: 'report_insight' }),
   })
-  const usage = accountModelTokens(result.usage)
   await input.onCallCompleted?.({
     provider: model.provider,
     model: model.id,
-    tokens: usage.totalTokens,
   })
   try {
     const insight = createReportInsightOutput(result.content)
@@ -52,10 +49,9 @@ export async function runReportInsightAgent(input: {
       ...insight,
       model: model.id,
       provider: model.provider,
-      tokens: usage.totalTokens,
     }
   } catch (error) {
-    withCompletedUsage(error, { ...usage, usageComplete: true }, { provider: model.provider, model: model.id })
+    withCompletedCall(error, { provider: model.provider, model: model.id })
   }
 }
 

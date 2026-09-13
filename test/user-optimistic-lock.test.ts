@@ -19,7 +19,9 @@ const {
   updateManagedUser,
   updateUserProfile,
 } = await import('../lib/auth/session')
-const { createProjectForUser, ProjectUpdateConflictError, replaceProjectMembers, updateProject } = await import('../lib/db/repository')
+const {createNativeProject,nativeWorkspace}=await import('./helpers/native-project')
+const {replaceProjectMembers}=await import('../lib/db/project-members-repository')
+const {ReportSubmissionError}=await import('../modules/reports/upload-domain')
 const { nextMonotonicIsoTimestamp } = await import('../lib/monotonic-iso-timestamp')
 
 migrateDatabase()
@@ -172,15 +174,16 @@ test('a second sqlite connection cannot apply a stale updatedAt write', async ()
 
 test('frozen clock project updates conflict instead of sharing a timestamp', () => {
   const owner = createOrUpdateUser({ username: 'lock-project-owner', displayName: '课题负责人', password: 'password-lock-123', role: 'researcher' })
-  const project = createProjectForUser({ title: '版本课题', objective: '', description: '', ownerName: owner.displayName }, owner.id)
+  const project=createNativeProject({database:getDatabase(),ownerId:owner.id,title:'版本课题'})
+  const {workspace}=nativeWorkspace(getDatabase())
   const clock = freezeNow(project.updatedAt)
   try {
-    const first = updateProject(project.id, { title: '一次课题' }, { expectedUpdatedAt: project.updatedAt })
+    const first = workspace.safeEditProject({projectId:project.id,actorId:owner.id,edit:{title:'一次课题',expectedUpdatedAt:project.updatedAt}})
     assert.ok(first)
-    assert.ok(Date.parse(first.updatedAt) > clock.frozen)
+    assert.ok(Date.parse(first.project.updatedAt) > clock.frozen)
     assert.throws(
-      () => updateProject(project.id, { title: '二次旧稿' }, { expectedUpdatedAt: project.updatedAt }),
-      (error: unknown) => error instanceof ProjectUpdateConflictError,
+      () => workspace.safeEditProject({projectId:project.id,actorId:owner.id,edit:{title:'二次旧稿',expectedUpdatedAt:project.updatedAt}}),
+      (error: unknown) => error instanceof ReportSubmissionError && error.code==='PROJECT_UPDATE_CONFLICT',
     )
   } finally {
     clock.restore()
@@ -188,19 +191,21 @@ test('frozen clock project updates conflict instead of sharing a timestamp', () 
 })
 
 test('membership writes bump project updatedAt even when the clock is frozen', () => {
+  const admin = createOrUpdateUser({username:'lock-member-admin',displayName:'成员管理员',password:'password-lock-123',role:'admin'})
   const owner = createOrUpdateUser({ username: 'lock-member-owner', displayName: '成员负责人', password: 'password-lock-123', role: 'researcher' })
   const editor = createOrUpdateUser({ username: 'lock-member-editor', displayName: '成员编辑', password: 'password-lock-123', role: 'researcher' })
-  const project = createProjectForUser({ title: '成员版本课题', objective: '', description: '', ownerName: owner.displayName }, owner.id)
+  const project=createNativeProject({database:getDatabase(),ownerId:owner.id,title:'成员版本课题'})
+  const {workspace}=nativeWorkspace(getDatabase())
   const clock = freezeNow(project.updatedAt)
   try {
-    const members = replaceProjectMembers(project.id, [
+    const members = replaceProjectMembers({projectId:project.id,actorId:admin.id,expectedRevision:0,members:[
       { userId: owner.id, role: 'owner' },
       { userId: editor.id, role: 'editor' },
-    ])
+    ]})
     assert.ok(members)
     assert.throws(
-      () => updateProject(project.id, { title: '旧课题稿' }, { expectedUpdatedAt: project.updatedAt }),
-      (error: unknown) => error instanceof ProjectUpdateConflictError,
+      () => workspace.safeEditProject({projectId:project.id,actorId:owner.id,edit:{title:'旧课题稿',expectedUpdatedAt:project.updatedAt}}),
+      (error: unknown) => error instanceof ReportSubmissionError && error.code==='PROJECT_UPDATE_CONFLICT',
     )
   } finally {
     clock.restore()

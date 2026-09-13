@@ -1,6 +1,6 @@
 'use client'
 
-import { ChevronDown, HelpCircle, LogOut, Pencil, Search, Settings, UserRound } from 'lucide-react'
+import { ChevronDown, LogOut, Pencil, Search, Settings, UserRound } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { NotificationCenter } from '@/components/notification-center'
@@ -16,7 +16,6 @@ export function TopbarUserNav({
   onSettingsIntent,
   onEditProfile,
   onSearch,
-  onHelp,
   notificationRefreshKey,
 }: {
   user?: SessionUser
@@ -24,7 +23,6 @@ export function TopbarUserNav({
   onSettingsIntent?: () => void
   onEditProfile: () => void
   onSearch?: () => void
-  onHelp?: () => void
   notificationRefreshKey?: number
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
@@ -56,7 +54,7 @@ export function TopbarUserNav({
   return (
     <div className="relative flex items-center gap-1 sm:gap-1.5">
       {onSearch ? (
-        <Button variant="icon" onClick={onSearch} aria-label="搜索课题 (⌘K)" title="搜索课题 (⌘K)" className="rounded-lg">
+        <Button variant="icon" onClick={onSearch} aria-label="搜索课题" title="搜索课题" className="rounded-lg">
           <Search className="h-4 w-4" />
         </Button>
       ) : null}
@@ -105,12 +103,6 @@ export function TopbarUserNav({
                 <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); onSettings() }} className="flex h-8 w-full items-center gap-2 rounded-md px-2.5 text-xs text-yx-ink transition-colors hover:bg-yx-hover">
                   <Settings className="h-3.5 w-3.5 text-yx-muted" />
                   <span>主要设置</span>
-                </button>
-              ) : null}
-              {onHelp ? (
-                <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); onHelp() }} className="flex h-8 w-full items-center gap-2 rounded-md px-2.5 text-xs text-yx-ink transition-colors hover:bg-yx-hover">
-                  <HelpCircle className="h-3.5 w-3.5 text-yx-muted" />
-                  <span>使用指南与快捷提示</span>
                 </button>
               ) : null}
               <div className="my-1 border-t border-yx-line" />
@@ -242,65 +234,6 @@ export function EditProfileDialog({
           <Button type="submit" loading={saving}>保存修改</Button>
         </DialogFooter>
       </form>
-    </Dialog>
-  )
-}
-
-export function HelpTipsDialog({ onClose }: { onClose: () => void }) {
-  const closeButtonRef = useRef<HTMLButtonElement>(null)
-  return (
-    <Dialog onClose={onClose} labelledBy="help-dialog-title" size="lg" initialFocusRef={closeButtonRef}>
-      <DialogHeader
-        title="使用指南与快捷提示"
-        description="研行 · 产业政策研究与智能分析工作台。"
-        titleId="help-dialog-title"
-        icon={HelpCircle}
-        onClose={onClose}
-        closeRef={closeButtonRef}
-        closeLabel="关闭提示"
-      />
-      <DialogBody className="space-y-3 text-xs text-yx-muted">
-        <div className="rounded-lg border border-yx-line bg-yx-surface p-3">
-          <h3 className="mb-1.5 flex items-center gap-1.5 font-semibold text-yx-ink">
-            <span className="flex h-4 w-4 items-center justify-center rounded-full bg-yx-brand text-[10px] font-bold text-white">1</span>
-            快捷操作键
-          </h3>
-          <div className="grid grid-cols-2 gap-2 text-[11px]">
-            <div className="flex items-center justify-between rounded border border-yx-line bg-yx-paper px-2 py-1.5">
-              <span>全局搜索课题</span>
-              <kbd className="rounded border border-yx-line bg-yx-surface px-1.5 py-0.5 font-mono text-[10px] font-semibold text-yx-ink">⌘K / Ctrl+K</kbd>
-            </div>
-            <div className="flex items-center justify-between rounded border border-yx-line bg-yx-paper px-2 py-1.5">
-              <span>关闭当前弹窗</span>
-              <kbd className="rounded border border-yx-line bg-yx-surface px-1.5 py-0.5 font-mono text-[10px] font-semibold text-yx-ink">Esc</kbd>
-            </div>
-          </div>
-        </div>
-        <div className="rounded-lg border border-yx-line bg-yx-surface p-3">
-          <h3 className="mb-1.5 flex items-center gap-1.5 font-semibold text-yx-ink">
-            <span className="flex h-4 w-4 items-center justify-center rounded-full bg-yx-brand text-[10px] font-bold text-white">2</span>
-            研究与分析流程
-          </h3>
-          <ul className="list-inside list-disc space-y-1 text-[11px] text-yx-muted">
-            <li><b>创建课题</b>：在左侧栏点击「新建课题」并指定课题负责人与研究方向。</li>
-            <li><b>上传分析</b>：支持上传 DOCX / PDF 报告文件，系统将自动触发多阶段流水线分析。</li>
-            <li><b>多维洞察</b>：集中查看事实萃取、质量评分、决策建议、可视化词云与思维导图。</li>
-          </ul>
-        </div>
-        <div className="rounded-lg border border-yx-line bg-yx-surface p-3">
-          <h3 className="mb-1.5 flex items-center gap-1.5 font-semibold text-yx-ink">
-            <span className="flex h-4 w-4 items-center justify-center rounded-full bg-yx-brand text-[10px] font-bold text-white">3</span>
-            系统设置与个性化
-          </h3>
-          <ul className="list-inside list-disc space-y-1 text-[11px] text-yx-muted">
-            <li><b>模型渠道</b>：管理员可在右上角「主要设置」中配置 Chat Completions 渠道、思考强度与上下文限制。</li>
-            <li><b>个人资料</b>：点击右上角用户头像展开菜单，可修改您的专属头像标识与显示名称。</li>
-          </ul>
-        </div>
-      </DialogBody>
-      <DialogFooter>
-        <Button onClick={onClose}>知道了</Button>
-      </DialogFooter>
     </Dialog>
   )
 }

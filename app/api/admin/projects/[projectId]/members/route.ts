@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server'
+import { ReportAuthorizationChangedError } from '@/lib/auth/authorization-changed'
 import { requireAdmin } from '@/lib/auth/request'
 import { getManagedUserById } from '@/lib/auth/session'
-import { getProjectMembersSnapshot, isProjectMemberRole, ProjectCollaboratorLimitError, ProjectMembershipConflictError, replaceProjectMembers } from '@/lib/db/repository'
+import { getProjectMembersSnapshot, isProjectMemberRole, ProjectCollaboratorLimitError, ProjectMembershipConflictError, replaceProjectMembers } from '@/lib/db/project-members-repository'
 import { PROJECT_FIELD_LIMITS } from '@/modules/projects/validation'
 import { jsonBodyFailureResponse } from '@/lib/http/json-body-response'
 import { readJsonBodyOrTooLarge } from '@/lib/http/request-body'
@@ -21,6 +22,8 @@ export async function GET(
   const access = requireAdmin(request)
   if (access instanceof NextResponse) return access
   const { projectId } = await context.params
+  const refreshed = requireAdmin(request)
+  if (refreshed instanceof NextResponse) return refreshed
   const snapshot = getProjectMembersSnapshot(projectId)
   if (!snapshot) return NextResponse.json({ error: '课题不存在。' }, { status: 404 })
   return NextResponse.json(snapshot)
@@ -65,11 +68,12 @@ export async function PUT(
   }
 
   try {
-    const updated = replaceProjectMembers(projectId, members, Number(body.revision), access.id)
+    const updated = replaceProjectMembers({projectId, members, expectedRevision: Number(body.revision), actorId: access.id})
     return updated
       ? NextResponse.json(updated)
       : NextResponse.json({ error: '课题不存在。' }, { status: 404 })
   } catch (error) {
+    if (error instanceof ReportAuthorizationChangedError) return NextResponse.json({error:error.message},{status:403})
     if (error instanceof ProjectMembershipConflictError) {
       return NextResponse.json({ error: error.message, code: 'MEMBERSHIP_CONFLICT' }, { status: 409 })
     }

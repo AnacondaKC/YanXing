@@ -4,6 +4,7 @@ import { normalizeChatCompletionsBaseUrl } from '@/lib/ai/runtime/chat-completio
 import { createAnalysisPromptPlan } from '@/lib/ai/prompt-budget'
 import { buildPageAnalysisTaskPrompt } from '@/modules/analysis/prompt'
 import type { AiChannel, ModelProfile, ReasoningEffort } from '@/lib/ai/model/freeze'
+import { SubmissionTaskError } from '@/modules/reports/submission-task-domain'
 import {
   DEFAULT_MAX_CONTEXT_CHARACTERS,
   DEFAULT_MAX_OUTPUT_TOKENS,
@@ -17,8 +18,9 @@ import {
   MIN_MAX_OUTPUT_TOKENS,
   readRuntimeLimit,
 } from '@/lib/ai/runtime-options'
+import { runtimeConfig } from '@/lib/config/environment'
 import { getDatabase } from '@/lib/db/client'
-import { decryptSecret, encryptSecret } from '@/lib/db/settings-crypto'
+import { decryptSecret, decryptSecretWithSecret, encryptSecret } from '@/lib/db/settings-crypto'
 import { AnalysisModuleIds, type AnalysisGlobalSystemPrompt, type AnalysisPromptConfig } from '@/modules/contracts/analysis'
 import {
   AI_PROMPT_TARGETS,
@@ -269,8 +271,7 @@ export function getPublicAiModelSettings(): PublicAiModelSettings {
   }
 }
 
-export function getPublicAiPromptSettings(): PublicAiPromptSettings {
-  const database = getDatabase()
+export function getPublicAiPromptSettingsInDatabase(database: DatabaseSync): PublicAiPromptSettings {
   const revision = readSettingsRevision(database, 'prompts')
   const rows = database.prepare(`
     SELECT target, system_prompt, instruction_prompt, version, updated_at, updated_by
@@ -289,13 +290,17 @@ export function getPublicAiPromptSettings(): PublicAiPromptSettings {
   }
 }
 
-/** 返回创建分析任务时需要冻结的提示词副本。 */
-export function getAiPromptSettingsSnapshot(): AnalysisPromptConfig[] {
-  return getPublicAiPromptSettings().prompts.map((prompt) => ({ ...prompt }))
+export function getPublicAiPromptSettings(): PublicAiPromptSettings {
+  return getPublicAiPromptSettingsInDatabase(getDatabase())
 }
 
-export function getAiPromptConfiguration(target: AiPromptTarget): AnalysisPromptConfig {
-  return getPublicAiPromptSettings().prompts.find((prompt) => prompt.target === target) ?? getDefaultAiPromptConfig(target)
+/** 返回创建分析任务时需要冻结的提示词副本。 */
+export function getAiPromptSettingsSnapshotInDatabase(database: DatabaseSync): AnalysisPromptConfig[] {
+  return getPublicAiPromptSettingsInDatabase(database).prompts.map((prompt) => ({ ...prompt }))
+}
+
+export function getAiPromptSettingsSnapshot(): AnalysisPromptConfig[] {
+  return getAiPromptSettingsSnapshotInDatabase(getDatabase())
 }
 
 export function saveAiPromptSettings(input: AiPromptSettingInput, updatedBy: string, actorId?: string, expectedRevision?: number): PublicAiPromptSettings {
@@ -500,8 +505,8 @@ function normalizePromptUpdatedBy(value: string) {
   return value.trim()
 }
 
-function readAssignedAiModelRuntime(target: AiModelSelectionTarget) {
-  const row = getDatabase().prepare(`
+function readAssignedAiModelRuntime(target: AiModelSelectionTarget, database: DatabaseSync = getDatabase()) {
+  const row = database.prepare(`
     SELECT
       assignments.target,
       channels.id AS channel_id,
@@ -541,6 +546,19 @@ function decryptChannelApiKey(channelName: string, encrypted: string | null) {
   }
 }
 
+function decryptChannelApiKeyInDatabase(channelName: string, encrypted: string | null) {
+  if (!encrypted) return undefined
+  const configuredSecret = runtimeConfig.settingsEncryptionKey
+  if (!configuredSecret) {
+    throw new SubmissionTaskError('SETTINGS_ENCRYPTION_KEY_MISSING', '请为 Web 和 Worker 配置同一 YANXING_SETTINGS_ENCRYPTION_KEY；原生分析任务不使用本地 .settings-key 文件。', 503)
+  }
+  try {
+    return decryptSecretWithSecret(encrypted, Buffer.from(configuredSecret, 'utf8'))
+  } catch {
+    throw new Error('渠道「' + channelName + '」的 API 密钥无法解密（服务器加密密钥已更换或丢失），请在管理页重新输入并保存。')
+  }
+}
+
 export function getAiModelRuntimeConfiguration(target: AiModelSelectionTarget): AiModelRuntimeConfiguration | undefined {
   const assigned = readAssignedAiModelRuntime(target)
   if (!assigned) return undefined
@@ -571,13 +589,39 @@ export function getAiModelRuntimeConfiguration(target: AiModelSelectionTarget): 
   }
 }
 
-export function getAiModelRuntimeSnapshot(target: AiModelSelectionTarget): AiModelRuntimeSnapshot | undefined {
-  const assigned = readAssignedAiModelRuntime(target)
+export function getAiModelRuntimeSnapshotInDatabase(database: DatabaseSync, target: AiModelSelectionTarget): AiModelRuntimeSnapshot | undefined {
+  const assigned = readAssignedAiModelRuntime(target, database)
   if (!assigned) return undefined
-  const { row, channelId, channelName, channel, modelId, modelName } = assigned
-  decryptChannelApiKey(channelName, row.api_key_encrypted)
-  return {
+  return toAiModelRuntimeSnapshot({
     target,
+    assigned,
+    settingsRevision: readSettingsRevision(database, 'models'),
+    decrypt: (channelName, encrypted) => decryptChannelApiKeyInDatabase(channelName, encrypted),
+  })
+}
+
+export function getAiModelRuntimeSnapshot(target: AiModelSelectionTarget): AiModelRuntimeSnapshot | undefined {
+  const database = getDatabase()
+  const assigned = readAssignedAiModelRuntime(target, database)
+  if (!assigned) return undefined
+  return toAiModelRuntimeSnapshot({
+    target,
+    assigned,
+    settingsRevision: readSettingsRevision(database, 'models'),
+    decrypt: decryptChannelApiKey,
+  })
+}
+
+function toAiModelRuntimeSnapshot(input: {
+  target: AiModelSelectionTarget
+  assigned: NonNullable<ReturnType<typeof readAssignedAiModelRuntime>>
+  settingsRevision: number
+  decrypt: (channelName: string, encrypted: string | null) => string | undefined
+}): AiModelRuntimeSnapshot {
+  const { row, channelId, channelName, channel, modelId, modelName } = input.assigned
+  input.decrypt(channelName, row.api_key_encrypted)
+  return {
+    target: input.target,
     channelId,
     channelName,
     channel,
@@ -598,7 +642,7 @@ export function getAiModelRuntimeSnapshot(target: AiModelSelectionTarget): AiMod
       MAX_MAX_OUTPUT_TOKENS,
     ),
     reasoningEffort: isAiReasoningEffort(row.reasoning_effort) ? row.reasoning_effort : DEFAULT_REASONING_EFFORT,
-    settingsRevision: readSettingsRevision(getDatabase(), 'models'),
+    settingsRevision: input.settingsRevision,
   }
 }
 export function saveAiModelChannel(input: AiModelChannelInput, existingChannelId?: string, actorId?: string, expectedRevision?: number): PublicAiModelSettings {

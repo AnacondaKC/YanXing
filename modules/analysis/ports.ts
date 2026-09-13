@@ -1,5 +1,5 @@
-import type { AnalysisJob, AnalysisModelCall } from '@/modules/analysis/domain'
-import type { AiCallDetails } from '@/lib/ai/usage'
+import type { AnalysisJob, AnalysisModelCall, AnalysisSnapshot } from '@/modules/analysis/domain'
+import type { AiCallDetails } from '@/lib/ai/call-details'
 import type { AiModelRuntimeSnapshot } from '@/lib/db/settings-repository'
 import type {
   AnalysisArtifactRecord,
@@ -13,7 +13,7 @@ import type {
   ReportEvaluationContext,
   ReportFacts,
 } from '@/modules/contracts/analysis'
-import type { ReportSource, ReportVersion } from '@/modules/reports/domain'
+import type { ReportSource } from '@/modules/reports/domain'
 
 export interface AnalysisSnapshotWrite {
   id: string
@@ -48,36 +48,41 @@ export class AnalysisLeaseLostError extends Error {
 
 export interface AnalysisCallCheckpoint {
   jobId: string
-  details: AiCallDetails & Required<Pick<AiCallDetails, 'provider' | 'model' | 'stage' | 'module' | 'tokens'>>
+  details: AiCallDetails & Required<Pick<AiCallDetails, 'provider' | 'model' | 'stage' | 'module'>>
   artifact: AnalysisArtifactRecord
   state?: AnalysisModuleState
   snapshot?: AnalysisSnapshotWrite
 }
 
-export interface AnalysisPipelineRepository {
-  getJob(jobId: string): AnalysisJob | undefined
+export interface AnalysisPreparedDocument {
+  text: string
+  paragraphCount: number
+  characterCount: number
+}
+
+export type AnalysisExecutionJob = Pick<AnalysisJob, 'id' | 'status' | 'cancelRequested' | 'aiCallsCompleted'>
+
+export interface AnalysisExecutionRepository {
+  getJob(jobId: string): AnalysisExecutionJob | undefined
   getPromptSettings(jobId: string): AnalysisPromptConfig[] | undefined
-  getReport(reportVersionId: string): ReportVersion | undefined
-  getReportFacts(reportVersionId: string): ReportFacts
-  getReportSource(reportVersionId: string): ReportSource | undefined
+  getReportFacts(reportId: string): ReportFacts
+  getReportSource(reportId: string): ReportSource | undefined
   getJobEvaluationContext(jobId: string): ReportEvaluationContext
   getJobModelRuntime(jobId: string): AiModelRuntimeSnapshot
-  saveAiReportFacts(reportVersionId: string, facts: ReportFacts): ReportVersion | undefined
-  markReportParsingFailed(reportVersionId: string, message: string): ReportVersion | undefined
-  getCurrentSnapshot(reportVersionId: string): { id: string; payload: AnalysisSnapshotPayload } | undefined
-  getLatestPartialSnapshotForJob(jobId: string): import('@/modules/analysis/domain').AnalysisSnapshot | undefined
+  saveReportFacts(reportId: string, facts: ReportFacts): boolean
+  getDocumentText?(reportId: string): AnalysisPreparedDocument | undefined
+  getLatestPartialSnapshotForJob(jobId: string): AnalysisSnapshot | undefined
   listAcceptedArtifacts(jobId: string): AnalysisArtifactRecord[]
   listArtifacts(jobId: string): AnalysisArtifactRecord[]
   listModuleStates(jobId: string): AnalysisModuleState[]
   saveModuleState(jobId: string, state: AnalysisModuleState): void
   saveArtifact(jobId: string, artifact: AnalysisArtifactRecord): void
   saveFailedAttempt(jobId: string, artifact: AnalysisArtifactRecord, state: AnalysisModuleState): void
-  markAiCallStarted(jobId: string, details: Omit<AiCallDetails, 'tokens'>): void
+  markAiCallStarted(jobId: string, details: AiCallDetails): void
   checkpointAiCall(input: AnalysisCallCheckpoint): void
   settleCancelledAiCall(input: AnalysisCallCheckpoint): void
   publishFinalSnapshot(snapshot: AnalysisSnapshotWrite, finalization: AnalysisFinalization): void
-  updateJob(jobId: string, input: { status?: AnalysisJob['status']; stage?: AnalysisStage; stageIndex?: number; errorMessage?: string }): AnalysisJob | undefined
-  failJob(jobId: string, message: string): AnalysisJob | undefined
+  updateJob(jobId: string, input: { status?: AnalysisJob['status']; stage?: AnalysisStage; stageIndex?: number; errorMessage?: string }): AnalysisExecutionJob | undefined
   isCancellationRequested(jobId: string): boolean
 }
 

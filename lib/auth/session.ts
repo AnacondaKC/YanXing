@@ -12,6 +12,7 @@ const scryptBlockSize = 8
 const scryptParallelization = 1
 const scryptKeyLength = 64
 const scryptMaxMemory = 64 * 1024 * 1024
+const SQLITE_FOREIGN_KEY_CONSTRAINT = 787
 
 export type UserRole = 'admin' | 'researcher'
 
@@ -236,7 +237,14 @@ export function deleteManagedUser(userId: string, actorId?: string): boolean {
       throw new Error('该用户仍是课题唯一负责人，请先转交课题负责人后再删除。')
     }
 
-    database.prepare('DELETE FROM users WHERE id = ?').run(userId)
+    try {
+      database.prepare('DELETE FROM users WHERE id = ?').run(userId)
+    } catch (error) {
+      if (error instanceof Error && 'errcode' in error && error.errcode === SQLITE_FOREIGN_KEY_CONSTRAINT) {
+        throw new Error('该用户有需要保留的提交、任务或审计记录，请停用账号而不是删除。')
+      }
+      throw error
+    }
 
     return true
   })
@@ -273,22 +281,6 @@ export function updateUserProfile(userId: string, input: {
   })
 }
 
-
-export function getActiveUserById(userId: string): AuthUser | undefined {
-  return getActiveUsersByIds([userId])[0]
-}
-
-export function getActiveUsersByIds(ids: string[]): Array<AuthUser | undefined> {
-  if (!ids.length) return []
-  const uniqueIds = [...new Set(ids)]
-  const rows = getDatabase().prepare(`
-    SELECT id, username, display_name, role, avatar
-    FROM users
-    WHERE status = 'active' AND id IN (${uniqueIds.map(() => '?').join(', ')})
-  `).all(...uniqueIds) as Array<Record<string, unknown>>
-  const users = new Map(rows.map((row) => [String(row.id), userFromRow(row)] as const))
-  return ids.map((id) => users.get(id))
-}
 
 export function listActiveUsers(pagination?: { limit: number; offset: number }): AuthUser[] {
   const suffix = pagination ? ' LIMIT ? OFFSET ?' : ''

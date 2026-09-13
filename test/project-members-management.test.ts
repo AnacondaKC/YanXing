@@ -8,7 +8,8 @@ const directory = await mkdtemp(`${tmpdir()}/yanxing-project-members-`)
 process.env.YANXING_DATABASE_PATH = path.join(directory, 'project-members-test.sqlite')
 
 const { createOrUpdateUser, createSession, sessionCookieName } = await import('../lib/auth/session')
-const { getProject, getUserProjectRole, createProjectForUser } = await import('../lib/db/repository')
+const {getDatabase}=await import('../lib/db/client')
+const {createNativeProject}=await import('./helpers/native-project')
 const { GET: listMembers, PUT: saveMembers } = await import('../app/api/admin/projects/[projectId]/members/route')
 
 test.after(async () => {
@@ -36,7 +37,7 @@ test('administrators manage members with a single owner and at most three collab
   const extra = createOrUpdateUser({ username: 'members-extra', displayName: '额外研究员', password: 'members-extra-123', role: 'researcher' })
   const extraTwo = createOrUpdateUser({ username: 'members-extra-two', displayName: '额外研究员二', password: 'members-extra-two-123', role: 'researcher' })
   const extraThree = createOrUpdateUser({ username: 'members-extra-three', displayName: '额外研究员三', password: 'members-extra-three-123', role: 'researcher' })
-  const project = createProjectForUser({ title: '权限组测试课题', objective: '', description: '', ownerName: owner.displayName }, owner.id)
+  const project=createNativeProject({database:getDatabase(),ownerId:owner.id,title:'权限组测试课题'})
   const adminSession = createSession(admin.id)
   const ownerSession = createSession(owner.id)
 
@@ -55,9 +56,9 @@ test('administrators manage members with a single owner and at most three collab
   })) as [Request, { params: Promise<{ projectId: string }> }])
   assert.equal(saved.status, 200)
   const savedBody = await saved.json() as { revision?: number }
-  assert.equal(getUserProjectRole(project.id, owner), 'editor')
-  assert.equal(getUserProjectRole(project.id, editor), 'owner')
-  assert.equal(getProject(project.id)?.ownerName, '编辑研究员')
+  assert.equal(getDatabase().prepare('SELECT role FROM project_members WHERE project_id=? AND user_id=?').get(project.id,owner.id)?.role,'editor')
+  assert.equal(getDatabase().prepare('SELECT role FROM project_members WHERE project_id=? AND user_id=?').get(project.id,editor.id)?.role,'owner')
+  assert.equal(getDatabase().prepare('SELECT owner_name FROM projects WHERE id=?').get(project.id)?.owner_name,'编辑研究员')
 
   const conflict = await saveMembers(...Object.values(request(adminSession.token, project.id, 'PUT', {
     revision: listedBody.revision,

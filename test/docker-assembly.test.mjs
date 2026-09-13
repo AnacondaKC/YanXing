@@ -14,7 +14,7 @@ test('runtime trace refuses absolute paths, empty paths and traversal outside th
 })
 
 test('runtime packaging identifies private environment and storage paths', () => {
-  for (const entry of ['.env', '.env.lan', 'storage/yanxing.sqlite', 'storage/.settings-key', '.git/config']) {
+  for (const entry of ['.env', '.env.lan', 'storage/yanxing.sqlite', 'storage/.settings-key', 'storage-native/yanxing.sqlite', 'storage-native/reports/report.docx', '.git/config']) {
     assert.equal(isPrivateRuntimePath(entry), true, entry)
   }
   assert.equal(isPrivateRuntimePath('.runtime/worker/index.mjs'), false)

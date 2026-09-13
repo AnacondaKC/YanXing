@@ -1,15 +1,61 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { createElement, type ComponentProps } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import {
   analysisResultHint,
   analysisResultPlaceholder,
   resolveAnalysisResultDisplay,
 } from '../modules/analysis/progress'
 import {
+  ResearchWorkbench,
   isWorkbenchAnalysisInFlight,
   resolveHistoricalWorkbenchTitle,
   resolveWorkbenchAnalysisAction,
 } from '../components/research-workbench'
+
+test('idle workbench keeps update report next to the analysis action', () => {
+  const scenarios: { label: string; props: Partial<ComponentProps<typeof ResearchWorkbench>> }[] = [
+    { label: '启动分析', props: {} },
+    { label: '更新分析', props: { report: { id: 'report-1', hasCompletedFullAnalysis: true } } },
+    { label: '再次分析', props: { job: { status: 'failed', stage: 'page_analysis', stageIndex: 2 } } },
+  ]
+  for (const { label, props } of scenarios) {
+    const markup = renderToStaticMarkup(createElement(ResearchWorkbench, {
+      report: { id: 'report-1' }, analyzing: false, cancelling: false, canManage: true,
+      onCancelAnalysis: async () => {}, onStartAnalysis: () => {}, onUpdateReport: () => {}, onEditProject: () => {},
+      ...props,
+    }))
+    const buttons = [...markup.matchAll(/<button\b[^>]*>[\s\S]*?<\/button>/g)].map(match => match[0])
+    assert.deepEqual(buttons.map(button => button.replace(/<[^>]+>/g, '')), [label, '更新报告', '修改课题'])
+    assert.ok(markup.includes(buttons[0] + buttons[1]), 'analysis and update buttons must be adjacent siblings')
+    assert.doesNotMatch(buttons[1], /class="[^"]*absolute/)
+    assert.match(buttons[1], /aria-haspopup="dialog"/)
+  }
+})
+
+test('active analysis only shows the stop action, including startup and cancellation', () => {
+  const scenarios: Partial<ComponentProps<typeof ResearchWorkbench>>[] = [
+    { analyzing: true },
+    { job: { status: 'queued', stage: 'validating', stageIndex: 0 } },
+    { job: { status: 'running', stage: 'page_analysis', stageIndex: 2 } },
+    { job: { status: 'running', stage: 'page_analysis', stageIndex: 2 }, cancelling: true },
+  ]
+  for (const props of scenarios) {
+    for (const viewingHistoricalReport of [false, true]) {
+      const markup = renderToStaticMarkup(createElement(ResearchWorkbench, {
+        report: { id: 'report-1' }, analyzing: false, cancelling: false, canManage: true,
+        onCancelAnalysis: async () => {}, onStartAnalysis: () => {}, onUpdateReport: () => {}, onEditProject: () => {},
+        viewingHistoricalReport,
+        ...props,
+      }))
+      const buttons = [...markup.matchAll(/<button\b[^>]*>[\s\S]*?<\/button>/g)].map(match => match[0])
+      assert.deepEqual(buttons.map(button => button.replace(/<[^>]+>/g, '')), [props.cancelling ? '停止中' : '停止'])
+      assert.match(markup, /aria-live="polite"/)
+      assert.doesNotMatch(markup, /更新报告/)
+    }
+  }
+})
 
 test('workbench leaves analysis-in-flight as soon as the job is terminal', () => {
   assert.equal(isWorkbenchAnalysisInFlight(true), true)

@@ -24,8 +24,6 @@ import {
 import { encryptSecret } from '@/lib/db/settings-crypto'
 import { runtimeConfig } from '@/lib/config/environment'
 
-export const INITIAL_AI_SETTINGS_VERSION = 'initial-ai-settings-v2'
-
 const INITIAL_MODEL_ASSIGNMENT_TARGETS = ['page_analysis', 'report_insight'] as const
 
 /**

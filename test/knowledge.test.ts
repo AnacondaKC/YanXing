@@ -11,7 +11,7 @@ process.env.YANXING_DATABASE_PATH = path.join(directory, 'knowledge-test.sqlite'
 process.env.YANXING_KNOWLEDGE_STORAGE_ROOT = storageRoot
 
 const { createOrUpdateUser, createSession, sessionCookieName } = await import('../lib/auth/session')
-const { getKnowledgeItem } = await import('../lib/db/repository')
+const { getKnowledgeItem } = await import('../lib/db/knowledge-repository')
 const { GET: listKnowledge, POST: uploadKnowledge } = await import('../app/api/knowledge/route')
 const { DELETE: deleteKnowledge } = await import('../app/api/knowledge/[knowledgeId]/route')
 

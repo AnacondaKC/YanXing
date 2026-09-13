@@ -14,7 +14,7 @@ import {
   storageUnavailableErrnos,
   type UploadReader,
 } from '@/lib/storage/stream-utils'
-import { userCanDeleteKnowledgeItem, type KnowledgeItem } from '@/lib/db/repository'
+import { userCanDeleteKnowledgeItem, type KnowledgeItem } from '@/lib/db/knowledge-repository'
 
 export const maxFileBytes = knowledgeMaxUploadBytes
 export const maxMultipartBytes = maxFileBytes + 1024 * 1024

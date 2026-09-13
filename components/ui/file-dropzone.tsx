@@ -12,15 +12,10 @@ export function isAllowedReportFile(name: string) {
   return /\.(docx|pdf)$/i.test(name)
 }
 
-export function reportFileContentType(name: string) {
-  return /\.pdf$/i.test(name)
-    ? 'application/pdf'
-    : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-}
-
 export function FileDropzone({
   file,
   disabled = false,
+  busy = disabled,
   onFile,
   onInvalid,
   maxBytes = reportMaxUploadBytes,
@@ -29,6 +24,7 @@ export function FileDropzone({
 }: {
   file?: File | null
   disabled?: boolean
+  busy?: boolean
   onFile: (file: File) => void
   onInvalid?: (message: string) => void
   maxBytes?: number
@@ -68,6 +64,7 @@ export function FileDropzone({
         role="button"
         tabIndex={disabled ? -1 : 0}
         aria-disabled={disabled}
+        aria-label={file ? `更换报告文件：${file.name}` : '选择报告文件'}
         onKeyDown={(event) => {
           if ((event.key === 'Enter' || event.key === ' ') && !disabled) {
             event.preventDefault()
@@ -93,7 +90,7 @@ export function FileDropzone({
         className={cx(
           'group relative flex min-h-[10rem] flex-col items-center justify-center rounded-lg border-2 border-dashed p-4 text-center transition-all',
           disabled
-            ? 'cursor-wait border-yx-brand/40 bg-yx-surface'
+            ? (busy ? 'cursor-wait border-yx-brand/40 bg-yx-surface' : 'cursor-not-allowed border-yx-line bg-yx-surface opacity-50')
             : dragOver
               ? 'scale-[1.005] cursor-pointer border-yx-brand bg-yx-brand/10'
               : file
@@ -103,13 +100,13 @@ export function FileDropzone({
         )}
       >
         <div className="mb-2.5 flex h-11 w-11 items-center justify-center rounded-xl bg-yx-brand text-white shadow-2xs">
-          {disabled ? <Loader2 className="h-5 w-5 animate-spin text-white" /> : <Upload className="h-5 w-5 text-white" />}
+          {busy ? <Loader2 className="h-5 w-5 animate-spin text-white" /> : <Upload className="h-5 w-5 text-white" />}
         </div>
         {file ? (
-          <div className="space-y-1">
+          <div className="w-full min-w-0 space-y-1">
             <span className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-yx-brand-tint bg-yx-brand-soft px-3 py-1 text-xs font-bold text-yx-brand-strong">
               <FileText className="h-3.5 w-3.5 shrink-0" />
-              <span className="max-w-[18rem] truncate">已选定：{file.name}</span>
+              <span className="min-w-0 max-w-[18rem] truncate" title={file.name}>已选定：{file.name}</span>
             </span>
             <p className="text-[11px] text-yx-muted">文件大小: {formatBytes(file.size)} · 点击可重新选择</p>
           </div>

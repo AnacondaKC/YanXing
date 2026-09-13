@@ -1,10 +1,10 @@
 'use client'
 
-import { AlertCircle, Download, ExternalLink, FileText, Loader2, Maximize2, Minimize2, RefreshCw } from 'lucide-react'
+import { AlertCircle, ArrowRight, Download, ExternalLink, FileText, Loader2, Maximize2, Minimize2, RefreshCw, Upload } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { DocumentEmptyPreview, EmptyPanelAction, WorkspaceEmptyPanel } from '@/components/workspace-empty-panel'
 import { useWorkspaceEntrance } from '@/components/use-workspace-entrance'
 import { apiFetch } from '@/lib/client-request'
-import type { ReportVersion } from '@/modules/reports/domain'
 
 const DOCX_FRAME_DOCUMENT = `<!doctype html>
 <html lang="zh-CN">
@@ -37,7 +37,7 @@ body { overflow: auto; scrollbar-width: thin; scrollbar-color: rgba(15, 23, 42, 
 <body><main id="document-root"></main></body>
 </html>`
 
-export function ReportDocumentViewer({ report }: { report?: ReportVersion }) {
+export function ReportDocumentViewer({ report, onUpload }: { report?: { id: string; title: string; fileName: string; displayLabel?: string; submittedAt?: string }; onUpload?: () => void }) {
   const [expanded, setExpanded] = useState(false)
   const [loading, setLoading] = useState(Boolean(report))
   const { entranceProps } = useWorkspaceEntrance(loading)
@@ -119,7 +119,7 @@ export function ReportDocumentViewer({ report }: { report?: ReportVersion }) {
         }
       })
     return () => controller.abort()
-  }, [fileUrl, isPdf, reloadKey, report?.fileHash, reportId])
+  }, [fileUrl, isPdf, reloadKey, reportId])
 
   useEffect(() => {
     if (!reportId || isPdf || !docxFrameReady) return
@@ -190,14 +190,14 @@ export function ReportDocumentViewer({ report }: { report?: ReportVersion }) {
       if (resizeFrame !== undefined) window.cancelAnimationFrame(resizeFrame)
       resizeObserver?.disconnect()
     }
-  }, [docxFrameReady, fileUrl, isPdf, reloadKey, report?.fileHash, reportId])
+  }, [docxFrameReady, fileUrl, isPdf, reloadKey, reportId])
 
   if (!report) {
-    return <div {...entranceProps} className="yx-detail flex min-h-0 min-w-0 flex-1 flex-col"><DocumentViewerEmptyState /></div>
+    return <div {...entranceProps} className="yx-detail flex min-h-0 min-w-0 flex-1 flex-col"><DocumentViewerEmptyState onUpload={onUpload} /></div>
   }
 
   const formatLabel = isPdf ? 'PDF' : 'DOCX'
-  const sourceUrl = `${fileUrl}?v=${encodeURIComponent(report.fileHash.slice(0, 12))}&r=${reloadKey}`
+  const sourceUrl = `${fileUrl}?r=${reloadKey}`
 
   return (
     <section
@@ -216,8 +216,8 @@ export function ReportDocumentViewer({ report }: { report?: ReportVersion }) {
             <div className="truncate text-[11px] font-semibold text-yx-ink" title={report.fileName}>{report.fileName}</div>
             <div className="mt-0.5 flex items-center gap-2 text-[9px] text-gray-400">
               <span>{formatLabel}</span>
-              <span>第 {report.version} 版</span>
-              <span>{new Date(report.createdAt).toLocaleDateString('zh-CN')}</span>
+              <span>{report.displayLabel ?? report.title}</span>
+              <span>{report.submittedAt ? new Date(report.submittedAt).toLocaleDateString('zh-CN') : ''}</span>
             </div>
           </div>
         </div>
@@ -248,7 +248,7 @@ export function ReportDocumentViewer({ report }: { report?: ReportVersion }) {
       )}
       {!isPdf && (
         <iframe
-          key={`${report.id}-${report.fileHash}-${reloadKey}`}
+          key={`${report.id}-${reloadKey}`}
           ref={docxFrameRef}
           title={`${report.title} - Word 原文`}
           sandbox="allow-same-origin"
@@ -280,15 +280,21 @@ export function ReportDocumentViewer({ report }: { report?: ReportVersion }) {
   )
 }
 
-function DocumentViewerEmptyState() {
+function DocumentViewerEmptyState({ onUpload }: { onUpload?: () => void }) {
   return (
-    <div className="yx-detail-content flex min-h-[560px] flex-1 items-center justify-center rounded-md bg-yx-paper p-6">
-      <div className="max-w-md text-center">
-        <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-md bg-gray-100 text-gray-500"><FileText className="h-5 w-5" /></span>
-        <h2 className="mt-4 text-base font-semibold text-yx-ink">尚未上传报告</h2>
-        <p className="mt-2 text-[11px] leading-relaxed text-gray-500">上传 PDF 或 DOCX 报告后，可在这里查看原始文档。</p>
-      </div>
-    </div>
+    <WorkspaceEmptyPanel
+      label="报告原文空状态"
+      title="尚未上传报告"
+      description="上传 PDF 或 DOCX 报告后，可在这里查看原始文档。"
+      action={onUpload ? (
+        <EmptyPanelAction onClick={onUpload}>
+          <Upload aria-hidden="true" className="h-4 w-4" />
+          <span>前往上传报告</span>
+          <ArrowRight aria-hidden="true" className="ml-2 h-4 w-4" />
+        </EmptyPanelAction>
+      ) : undefined}
+      preview={<DocumentEmptyPreview />}
+    />
   )
 }
 

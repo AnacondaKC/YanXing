@@ -18,7 +18,6 @@ test('count, byte and integer-ms configs reject fractional, negative and non-int
   process.env.KNOWLEDGE_UPLOAD_IDLE_TIMEOUT_MS = 'NaN'
   process.env.REPORT_PDF_PARSE_TIMEOUT_MS = ''
   process.env.YANXING_MODEL_CALLS_PER_MINUTE = String(Number.MAX_SAFE_INTEGER + 1)
-  process.env.YANXING_JOB_EVENTS_RETENTION_DAYS = '0.5'
 
   assert.equal(runtimeConfig.report.docxParseConcurrency, 2)
   assert.equal(runtimeConfig.report.maxUploadBytes, 25 * 1024 * 1024)
@@ -26,7 +25,6 @@ test('count, byte and integer-ms configs reject fractional, negative and non-int
   assert.equal(runtimeConfig.knowledgeUpload.idleTimeoutMs, 30_000)
   assert.equal(runtimeConfig.report.pdfParseTimeoutMs, 30_000)
   assert.equal(runtimeConfig.model.callsPerMinute, 30)
-  assert.equal(runtimeConfig.jobEventsRetentionDays, 90)
 })
 
 test('values destined for Node timers must stay within the 32-bit setTimeout range', () => {
@@ -36,6 +34,17 @@ test('values destined for Node timers must stay within the 32-bit setTimeout ran
   assert.equal(runtimeConfig.report.uploadTotalTimeoutMs, 10 * 60_000)
   process.env.YANXING_WORKER_POLL_MS = '2147483648'
   assert.equal(runtimeConfig.worker.pollMs, 1_000)
+})
+
+test('worker poll interval stays within the heartbeat healthcheck range', () => {
+  for (const value of [100, 101, 1_000, 599_999, 600_000]) {
+    process.env.YANXING_WORKER_POLL_MS = String(value)
+    assert.equal(runtimeConfig.worker.pollMs, value)
+  }
+  for (const value of ['', '99', '600001', '900000', '100.5', 'NaN', 'Infinity', '-1']) {
+    process.env.YANXING_WORKER_POLL_MS = value
+    assert.equal(runtimeConfig.worker.pollMs, 1_000, value)
+  }
 })
 
 test('session duration still accepts positive finite decimals', () => {
@@ -71,6 +80,31 @@ test('worker concurrency rejects out-of-range and non-integer values', () => {
       `Expected rejection for ${value}`,
     )
   }
+})
+
+test('AI configuration ignores retired budget variables and retains queue limits', () => {
+  for (const name of [
+    'YANXING_AI_DAILY_TOKENS',
+    'YANXING_AI_SEVEN_DAY_TOKENS',
+    'YANXING_AI_INSIGHT_ESTIMATED_TOKENS',
+    'YANXING_AI_PAGE_ANALYSIS_ESTIMATED_TOKENS',
+    'YANXING_AI_RESERVATION_TTL_MS',
+    'YANXING_AI_RECONCILIATION_INTERVAL_MS',
+  ]) {
+    process.env[name] = '1'
+  }
+  process.env.YANXING_AI_GLOBAL_QUEUE_LIMIT = '64'
+  process.env.YANXING_AI_INSIGHT_QUEUE_LIMIT = '16'
+  process.env.YANXING_AI_PROJECT_QUEUE_LIMIT = '8'
+  process.env.YANXING_AI_USER_QUEUE_LIMIT = '16'
+  process.env.YANXING_STORAGE_RESERVATION_TTL_MS = '900000'
+  assert.equal(runtimeConfig.storage.reservationTtlMs, 900000)
+  assert.deepEqual(runtimeConfig.ai, {
+    globalQueueLimit: 64,
+    insightQueueLimit: 16,
+    projectQueueLimit: 8,
+    userQueueLimit: 16,
+  })
 })
 
 test('valid integer overrides still apply', () => {

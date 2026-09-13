@@ -80,7 +80,6 @@ import {
 } from '../modules/contracts/analysis'
 import { persistReportStream, ReportUploadError } from '../lib/documents/report-storage'
 import { isValidMaxOutputTokens } from '../lib/ai/runtime-options'
-import { accountModelTokens, ModelUsageIncompleteError } from '../lib/ai/usage'
 
 function createAnalysisJob(input: Partial<AnalysisJob> = {}): AnalysisJob {
   return {
@@ -264,26 +263,7 @@ test('generic Chat Completions runtime uses its configured endpoint and always e
   }
 })
 
-test('token accounting returns normalized input, output, and total tokens', () => {
-  assert.deepEqual(accountModelTokens({
-    inputTokens: 7,
-    outputTokens: 5,
-    totalTokens: 10,
-    cacheHitTokens: 3,
-    reasoningTokens: 2,
-  }), {
-    inputTokens: 7,
-    outputTokens: 5,
-    totalTokens: 12,
-  })
-  assert.throws(() => accountModelTokens({
-    inputTokens: Number.MAX_SAFE_INTEGER,
-    outputTokens: 1,
-    totalTokens: Number.MAX_SAFE_INTEGER,
-  }), ModelUsageIncompleteError)
-})
-
-test('token accounting rejects provider responses without complete token usage', async () => {
+test('model execution accepts provider responses without token usage', async () => {
   const originalFetch = globalThis.fetch
   globalThis.fetch = async () => new Response(JSON.stringify({
     choices: [{ finish_reason: 'stop', message: { content: '{"ok":true}' } }],
@@ -297,8 +277,30 @@ test('token accounting rejects provider responses without complete token usage',
       prompt: 'prompt',
       output: { name: 'test_output', description: 'submit result', schema: { type: 'object' } },
     })
-    assert.equal(result.usage.usageComplete, false)
-    assert.throws(() => accountModelTokens(result.usage), ModelUsageIncompleteError)
+    assert.deepEqual(result.value, { ok: true })
+    assert.equal('usage' in result, false)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('model execution ignores malformed provider token usage', async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    usage: { prompt_tokens: -1, completion_tokens: 'invalid', total_tokens: null },
+    choices: [{ finish_reason: 'stop', message: { content: '{"ok":true}' } }],
+  }), { status: 200, headers: { 'content-type': 'application/json' } })
+
+  try {
+    const result = await runChatCompletionsStructuredJson({
+      model: { id: 'custom-model', provider: 'chat_completions', baseUrl: 'http://127.0.0.1/v1', maxOutputTokens: 4096 },
+      apiKey: 'test-key',
+      systemPrompt: 'system',
+      prompt: 'prompt',
+      output: { name: 'test_output', description: 'submit result', schema: { type: 'object' } },
+    })
+    assert.deepEqual(result.value, { ok: true })
+    assert.equal('usage' in result, false)
   } finally {
     globalThis.fetch = originalFetch
   }
@@ -353,7 +355,7 @@ test('generic Chat Completions maps output failures to stable typed errors', asy
           if (!(error instanceof ChatCompletionsError)) return false
           return error.code === scenario.code
             && error.retryable === scenario.retryable
-            && error.usage?.totalTokens === 5
+            && error.completed === true
             && error.provider === 'chat_completions'
             && error.model === 'custom-model'
         },

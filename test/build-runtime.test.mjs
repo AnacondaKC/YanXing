@@ -10,6 +10,9 @@ import {
 test('runtime compile entries cover worker, scripts, and parser children', () => {
   assert.deepEqual(COMPILED_RUNTIME_ENTRY_SOURCES, [
     'worker/index.ts',
+    'worker/submission-index.ts',
+    'scripts/recover-report-uploads.ts',
+    'scripts/native-backup.ts',
     'scripts/migrate.ts',
     'scripts/create-user.ts',
     'scripts/storage-maintenance.ts',
@@ -33,6 +36,8 @@ test('runtime nft extra entries include docker scripts and the parser resolver',
 test('runtime nft treats project storage and env files as private without matching lib/storage', () => {
   assert.equal(isPrivateTracePath('storage/yanxing.sqlite'), true)
   assert.equal(isPrivateTracePath('storage/knowledge/file.pdf'), true)
+  assert.equal(isPrivateTracePath('storage-native/yanxing.sqlite'), true)
+  assert.equal(isPrivateTracePath('storage-native/reports/file.docx'), true)
   assert.equal(isPrivateTracePath('.env'), true)
   assert.equal(isPrivateTracePath('.env.local'), true)
   assert.equal(isPrivateTracePath('.env.production'), true)
@@ -40,6 +45,14 @@ test('runtime nft treats project storage and env files as private without matchi
   assert.equal(isPrivateTracePath('lib/storage/maintenance.ts'), false)
   assert.equal(isPrivateTracePath('lib/documents/parser-child-runtime.mjs'), false)
   assert.equal(isPrivateTracePath('.runtime/worker/index.mjs'), false)
+})
+
+test('runtime nft excludes prior builds, candidates, tests, and master keys', () => {
+  for (const file of ['.next/server/app.js', '.next-p5-qa/standalone/node_modules/pkg/index.js', '.docker-runtime/server.js', 'out/p5-candidate/node_modules/pkg/index.js', 'test/fixture.sqlite', 'docs/example.md', 'custom/.settings-key']) {
+    assert.equal(shouldIgnoreTracedFile(file), true, file)
+  }
+  assert.equal(shouldIgnoreTracedFile('.runtime/scripts/native-backup.mjs'), false)
+  assert.equal(shouldIgnoreTracedFile('node_modules/next/dist/compiled/busboy/index.js'), false)
 })
 
 test('runtime nft ignores tsx, esbuild, and typescript package traces', () => {

@@ -4,16 +4,15 @@ import path from 'node:path'
 import { runtimeConfig } from '@/lib/config/environment'
 import { getDatabasePath } from '@/lib/db/database-path'
 
-function getLocalKeyPath() {
-  return path.join(path.dirname(getDatabasePath()), '.settings-key')
-}
-
 function getSecretBytes() {
   const configuredSecret = runtimeConfig.settingsEncryptionKey
   if (configuredSecret) return Buffer.from(configuredSecret, 'utf8')
+  return readLocalKeyBytes(path.dirname(getDatabasePath()))
+}
 
-  const localKeyPath = getLocalKeyPath()
-  mkdirSync(path.dirname(localKeyPath), { recursive: true })
+function readLocalKeyBytes(directory: string) {
+  const localKeyPath = path.join(directory, '.settings-key')
+  mkdirSync(directory, { recursive: true })
   if (!existsSync(localKeyPath)) {
     try {
       writeFileSync(localKeyPath, randomBytes(32), { flag: 'wx', mode: 0o600 })
@@ -33,7 +32,10 @@ const scryptOptions = { N: 2 ** 15, r: 8, p: 1, maxmem: 128 * 1024 * 1024 }
 let cachedScryptKey: { secretBase64: string; key: Buffer } | undefined
 
 function getKey() {
-  const secret = getSecretBytes()
+  return getKeyFromSecret(getSecretBytes())
+}
+
+function getKeyFromSecret(secret: Buffer) {
   const secretBase64 = secret.toString('base64')
   if (!cachedScryptKey || cachedScryptKey.secretBase64 !== secretBase64) {
     cachedScryptKey = { secretBase64, key: scryptSync(secret, 'yanxing-settings-encryption-v2', 32, scryptOptions) }
@@ -51,9 +53,22 @@ export function encryptSecret(value: string) {
 
 export function decryptSecret(value: string | null) {
   if (!value) return undefined
+  return decryptPayload(value, getKey())
+}
+
+export function decryptSecretWithSecret(value: string | null, secret: Buffer) {
+  if (!value) return undefined
+  return decryptPayload(value, getKeyFromSecret(secret))
+}
+
+export function deriveSettingsEncryptionKey(secret: Buffer) {
+  return getKeyFromSecret(secret)
+}
+
+function decryptPayload(value: string, key: Buffer) {
   const [version, iv, tag, encrypted] = value.split(':')
   if (version !== 'v2' || !iv || !tag || !encrypted) throw new Error('无法读取已保存的 API 密钥。')
-  const decipher = createDecipheriv('aes-256-gcm', getKey(), Buffer.from(iv, 'base64url'))
+  const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(iv, 'base64url'))
   decipher.setAuthTag(Buffer.from(tag, 'base64url'))
   return Buffer.concat([decipher.update(Buffer.from(encrypted, 'base64url')), decipher.final()]).toString('utf8')
 }

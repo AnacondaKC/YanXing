@@ -225,7 +225,7 @@ export function KnowledgeBaseWorkspace({
       {/* 工具面板：标题 + 搜索筛选 + 统计磁贴，装饰语言对齐总览与报告库 */}
       <section className="relative overflow-hidden rounded-lg border border-yx-line bg-yx-paper p-5 shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-[border-color,box-shadow] duration-200 hover:border-yx-brand/25 hover:shadow-[0_12px_28px_-14px_color-mix(in_srgb,var(--yx-brand-strong)_25%,transparent)]">
         <div aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden">
-          <CardAura showTopHighlight={false} />
+          <CardAura />
         </div>
         <div className="relative z-10">
           <div className="yx-repository-intro flex min-h-8 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">

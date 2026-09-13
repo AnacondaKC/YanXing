@@ -1,8 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { inflateRawSync } from 'node:zlib'
-import { basename, extname, join } from 'node:path'
-import { mkdir, open, rename, rm } from 'node:fs/promises'
+import { basename, dirname, extname, join, resolve } from 'node:path'
+import { getReportStorageRoot, getTemporaryStorageRoot } from '@/lib/storage/runtime-roots'
+import { mkdir, open, rename, rm, rmdir } from 'node:fs/promises'
 import type { ReportSource } from '@/modules/reports/domain'
+import { openFencedUpload, createFencedUploadDirectory, finalizeFencedUpload, type UploadMutationFence } from '@/lib/documents/fenced-upload-writer'
 import { runtimeConfig } from '@/lib/config/environment'
 import {
   cancelReader,
@@ -12,9 +14,8 @@ import {
   type UploadReader,
 } from '@/lib/storage/stream-utils'
 
-const storageRoot = join(process.cwd(), 'storage')
-export const reportStorageRoot = join(storageRoot, 'reports')
-const temporaryStorageRoot = join(storageRoot, 'tmp')
+export { getReportStorageRoot, getTemporaryStorageRoot } from '@/lib/storage/runtime-roots'
+export const reportStorageRoot = getReportStorageRoot()
 const docxMimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
 const pdfMimeType = 'application/pdf'
 
@@ -46,7 +47,7 @@ const reportUploadState = reportUploadGlobal.__yanxingReportUploads ?? { active:
 reportUploadGlobal.__yanxingReportUploads = reportUploadState
 
 export class ReportUploadError extends Error {
-  constructor(message: string, readonly status: 400 | 408 | 413 | 415 | 422 | 503 | 507, options: { code?: string; cause?: unknown } = {}) {
+  constructor(message: string, readonly status: 400 | 408 | 413 | 415 | 422 | 500 | 503 | 507, options: { code?: string; cause?: unknown } = {}) {
     super(message, options.cause === undefined ? undefined : { cause: options.cause })
     this.name = 'ReportUploadError'
     if (options.code) this.code = options.code
@@ -62,24 +63,14 @@ function normalizeStorageError(error: unknown) {
   return new ReportUploadError('报告存储空间不可用。', 507, { code, cause: error })
 }
 
-export function createReportId() {
-  return `report-${randomUUID()}`
-}
-
-export function parseContentLengthHeader(value: string | null) {
-  if (value === null) return undefined
-  if (!/^\d+$/.test(value)) throw new ReportUploadError('Content-Length 无效。', 400)
-  const parsed = Number(value)
-  if (!Number.isSafeInteger(parsed)) throw new ReportUploadError('Content-Length 无效。', 400)
-  return parsed
-}
-
 export async function persistReportStream(input: {
   reportId: string
   fileName: string
   body: ReadableStream<Uint8Array> | null
   contentLength?: number
   signal?: AbortSignal
+  storageRoot?: string
+  mutationFence?: UploadMutationFence
 }): Promise<ReportSource> {
   if (!reportIdPattern.test(input.reportId)) throw new ReportUploadError('报告标识无效。', 400)
   const originalName = basename(input.fileName || 'report.docx').slice(0, 240)
@@ -96,28 +87,32 @@ export async function persistReportStream(input: {
   if (reportUploadState.active >= maxConcurrentReportUploads) {
     throw new ReportUploadError('当前报告上传任务较多，请稍后再试。', 503)
   }
+  const reportsRoot = input.storageRoot === undefined ? getReportStorageRoot() : resolve(input.storageRoot)
+  const tempRoot = input.storageRoot === undefined ? getTemporaryStorageRoot() : join(reportsRoot, '.tmp')
   reportUploadState.active += 1
   try {
-    await mkdir(reportStorageRoot, { recursive: true })
-    await mkdir(temporaryStorageRoot, { recursive: true })
+    const firstCreatedDirectory = await mkdir(reportsRoot, { recursive: true })
+    if (firstCreatedDirectory) await syncNewDirectoryParents(reportsRoot, firstCreatedDirectory)
+    await mkdir(tempRoot, { recursive: true })
   } catch (error) {
     reportUploadState.active = Math.max(0, reportUploadState.active - 1)
     throw normalizeStorageError(error)
   }
-  const temporaryPath = join(temporaryStorageRoot, `${input.reportId}-${randomUUID()}.upload`)
-  const finalDirectory = join(reportStorageRoot, input.reportId)
+  const temporaryPath = join(tempRoot, `${input.reportId}-${randomUUID()}.upload`)
+  const finalDirectory = join(reportsRoot, input.reportId)
   const digest = createHash('sha256')
   const firstBytes = Buffer.alloc(4)
   let firstByteCount = 0
   let size = 0
-  let fileHandle: Awaited<ReturnType<typeof open>> | undefined
+  let fileHandle: Awaited<ReturnType<typeof open>> | ReturnType<typeof openFencedUpload> | undefined
   let reader: UploadReader | undefined
   let streamEnded = false
   let finalDirectoryCreated = false
   let renameSucceeded = false
+  let renamedPath: string | undefined
 
   try {
-    fileHandle = await open(temporaryPath, 'wx', 0o600)
+    fileHandle = input.mutationFence ? openFencedUpload(temporaryPath,input.mutationFence) : await open(temporaryPath, 'wx', 0o600)
     reader = input.body.getReader()
     const uploadDeadline = Date.now() + uploadTotalTimeoutMs
     try {
@@ -146,6 +141,7 @@ export async function persistReportStream(input: {
     } finally {
       releaseReaderLock(reader)
     }
+    await fileHandle.sync()
     await fileHandle.close()
     fileHandle = undefined
     throwIfUploadAborted(input.signal)
@@ -163,12 +159,22 @@ export async function persistReportStream(input: {
     if (detectedType === 'docx') await validateDocxArchive(temporaryPath, size)
     else await validatePdfFile(temporaryPath)
     throwIfUploadAborted(input.signal)
-    await mkdir(finalDirectory, { recursive: false })
+    if(input.mutationFence) createFencedUploadDirectory(finalDirectory,input.mutationFence)
+    else await mkdir(finalDirectory, { recursive: false })
     finalDirectoryCreated = true
     // 按文件头识别的实际类型存储，避免扩展名与内容不符时解析分派错误。
     const finalPath = join(finalDirectory, `${input.reportId}${detectedType === 'pdf' ? '.pdf' : '.docx'}`)
     throwIfUploadAborted(input.signal)
-    await rename(temporaryPath, finalPath)
+    if(input.mutationFence) {
+      // Record the owned target before fsync: cleanup must also cover a rename followed by sync failure.
+      renamedPath = finalPath
+      finalizeFencedUpload({temporaryPath,finalPath,fence:input.mutationFence})
+    } else {
+      await rename(temporaryPath, finalPath)
+      renamedPath = finalPath
+      await fsyncFileAndParent(finalPath)
+      await syncDirectory(reportsRoot)
+    }
     renameSucceeded = true
 
     reportUploadState.active = Math.max(0, reportUploadState.active - 1)
@@ -183,16 +189,51 @@ export async function persistReportStream(input: {
     reportUploadState.active = Math.max(0, reportUploadState.active - 1)
     if (reader && !streamEnded) cancelReader(reader, 'upload failed')
     if (fileHandle) await fileHandle.close().catch(() => undefined)
-    await rm(temporaryPath, { force: true }).catch(() => undefined)
-    // The directory may have been populated by a concurrent writer. A
-    // non-recursive removal cleans up only our empty directory and never
-    // deletes another upload's files.
-    if (finalDirectoryCreated && !renameSucceeded) await rm(finalDirectory, { force: true }).catch(() => undefined)
+    try {
+      await rm(temporaryPath, { force: true })
+      if (renamedPath && !renameSucceeded) await rm(renamedPath, { force: true })
+      if (finalDirectoryCreated && !renameSucceeded) {
+        await rmdir(finalDirectory).catch((cleanupError: unknown) => {
+          if (!['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes(errorCode(cleanupError) ?? '')) throw cleanupError
+        })
+      }
+    } catch (cleanupError) {
+      throw new ReportUploadError('准备文件清理失败。', 500, { code: 'UPLOAD_CLEANUP_FAILED', cause: cleanupError })
+    }
     if (input.signal?.aborted && !renameSucceeded) {
       throw new ReportUploadError('报告上传已取消。', 408, { cause: error })
     }
     if (error instanceof ReportUploadError) throw error
     throw normalizeStorageError(error)
+  }
+}
+
+async function fsyncFileAndParent(filePath: string) {
+  const file = await open(filePath, 'r')
+  try {
+    await file.sync()
+  } finally {
+    await file.close()
+  }
+  await syncDirectory(dirname(filePath))
+}
+
+async function syncDirectory(directoryPath: string) {
+  const directory = await open(directoryPath, 'r')
+  try {
+    await directory.sync()
+  } finally {
+    await directory.close()
+  }
+}
+
+async function syncNewDirectoryParents(directoryPath: string, firstCreated: string) {
+  const stop = dirname(firstCreated)
+  let current = directoryPath
+  while (current !== stop) {
+    const parent = dirname(current)
+    await syncDirectory(parent)
+    current = parent
   }
 }
 

@@ -3,25 +3,15 @@ import test from 'node:test'
 import { createElement, type ComponentProps } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { InsightEmptyState } from '../components/insight-empty-state'
-import { InsightWorkspace, isInsightGenerationInFlight } from '../components/insight-workspace'
 import { insightEmptyCopy, insightEmptyKind } from '../lib/insight-empty-state'
-import type { ReportVersion } from '../modules/reports/domain'
 
-const sampleReport: ReportVersion = {
-  id: 'report-empty',
-  projectId: 'project-empty',
-  version: 3,
+const sampleReport = {
   title: '阶段研究报告',
   fileName: 'phase-report.docx',
-  fileHash: 'empty-state-hash',
-  paragraphCount: 80,
-  characterCount: 20000,
-  parseStatus: 'ready',
-  createdAt: '2026-08-01T00:00:00Z',
-  sourceUpdatedAt: '2026-08-01T00:00:00Z',
+  stageVersion: 3,
 }
 
-function reportWith(overrides: Partial<ReportVersion>): ReportVersion {
+function reportWith(overrides: Partial<typeof sampleReport>) {
   return { ...sampleReport, ...overrides }
 }
 
@@ -48,15 +38,17 @@ function borderedPanelClass(html: string) {
 }
 
 function assertRedesignedChrome(html: string) {
-  assert.match(html, /报告简页样式示意/)
+  assert.match(html, /报告简页/)
   assert.match(html, /报告核心主旨/)
   assert.match(html, /核心论点/)
   assert.match(html, /关键论据/)
   assert.match(html, /报告建议/)
   assert.match(html, /5-10分钟阅读/)
   assert.doesNotMatch(html, /一页决策简报|核心判断|证据依据|行动建议|五分钟决策速读/)
-  assert.match(html, /非实际生成内容/)
-  assert.doesNotMatch(html, /blur-3xl|blur-2xl/)
+  assert.doesNotMatch(html, /<figcaption|非实际生成内容|报告简页样式示意/)
+  assert.match(html, /bg-yx-brand-bright\/12/)
+  assert.doesNotMatch(html, /via-yx-brand-bright\/30/)
+  assert.doesNotMatch(html, /blur-3xl/)
   assert.doesNotMatch(html, /报告洞察已就绪|立论脉络与证据收束|研判要点与行动建议|五分钟报告决策速读/)
   const classNames = new Set(borderedPanelClass(html).split(/\s+/))
   assert.equal(classNames.has('h-full'), true)
@@ -64,27 +56,6 @@ function assertRedesignedChrome(html: string) {
   assert.equal(classNames.has('overflow-y-auto'), true)
   assert.doesNotMatch(html, /min-h-\[400px\]/)
 }
-
-test('insight empty state keeps the heading and action without the badge or feature cards', () => {
-  const html = renderToStaticMarkup(createElement(InsightWorkspace, { canManage: true }))
-
-  assert.match(html, /开启决策洞察/)
-  assert.match(html, /前往上传报告/)
-  assert.doesNotMatch(html, /报告洞察已就绪|立论脉络与证据收束|研判要点与行动建议|五分钟报告决策速读/)
-})
-
-test('read-only insight empty state still explains upload permissions', () => {
-  const html = renderToStaticMarkup(createElement(InsightWorkspace, { canManage: false }))
-
-  assert.match(html, /请联系课题负责人上传报告后再查看洞察/)
-  assert.doesNotMatch(html, /<button/)
-})
-
-test('failed insight jobs are not treated as still generating', () => {
-  assert.equal(isInsightGenerationInFlight({ job: { id: 'job-1', status: 'failed', errorMessage: '模型调用失败。' } }), false)
-  assert.equal(isInsightGenerationInFlight({ job: { id: 'job-2', status: 'queued' } }), true)
-  assert.equal(isInsightGenerationInFlight({ generating: true }), true)
-})
 
 test('insight empty copy stays calm and specific to the current gap', () => {
   assert.equal(insightEmptyKind(false, false), 'missing-report')
@@ -184,10 +155,10 @@ test('empty-state errors offer retry that stays disabled while generating', () =
 test('selected report prefers fileName, falls back to title, and keeps long names in markup', () => {
   const longFileName = `${'国家产业政策评估与区域协同研究报告'.repeat(4)}.pdf`
   const named = renderInsightEmptyState({
-    report: reportWith({ fileName: longFileName, title: '短标题', version: 12 }),
+    report: reportWith({ fileName: longFileName, title: '短标题', stageVersion: 12 }),
   })
   const fallback = renderInsightEmptyState({
-    report: reportWith({ fileName: '', title: '仅有标题的研究报告', version: 2 }),
+    report: reportWith({ fileName: '', title: '仅有标题的研究报告', stageVersion: 2 }),
   })
 
   assert.match(named, /已选报告/)

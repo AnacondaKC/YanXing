@@ -223,9 +223,8 @@ recover_from_killed_service() {
 
 logs_show_migration_failure() {
   logs=$1
-  printf '%s\n' "$logs" | grep -F '数据库迁移失败' >/dev/null && return 0
-  printf '%s\n' "$logs" | grep -F 'checksum 不匹配' >/dev/null && return 0
-  printf '%s\n' "$logs" | grep -F '迁移账本校验失败' >/dev/null && return 0
+  printf '%s\n' "$logs" | grep -F '数据库初始化失败' >/dev/null && return 0
+  printf '%s\n' "$logs" | grep -F 'migrate failed (code=' >/dev/null && return 0
   return 1
 }
 
@@ -294,7 +293,7 @@ exit_code=$(docker inspect --format '{{.State.ExitCode}}' "$app_id")
 [ "$exit_code" = 0 ] || { echo "app did not stop cleanly: $exit_code" >&2; exit 1; }
 
 # Only this disposable database is corrupted to verify migration failure gating.
-compose run --rm -T --no-deps app node --input-type=module -e 'import { DatabaseSync } from "node:sqlite"; const db = new DatabaseSync(process.env.YANXING_DATABASE_PATH); db.prepare("UPDATE schema_migrations SET checksum = ? WHERE version = 1").run("smoke-invalid-checksum"); db.close()'
+compose run --rm -T --no-deps app node --input-type=module -e 'import { DatabaseSync } from "node:sqlite"; const db = new DatabaseSync(process.env.YANXING_DATABASE_PATH); db.prepare("UPDATE native_schema_identity SET checksum = ? WHERE id = 1").run("smoke-invalid-checksum"); db.close()'
 if compose up -d --force-recreate --wait --wait-timeout "$MIGRATE_WAIT_TIMEOUT_S"; then
   echo 'A failed migration unexpectedly allowed deployment.' >&2
   exit 1

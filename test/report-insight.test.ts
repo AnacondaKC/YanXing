@@ -1,27 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import path from 'node:path'
 import { createReportInsightOutput, runReportInsightAgent } from '../lib/ai/report-insight-agent'
 import type { ModelRuntime } from '../lib/ai/model-router'
 import type { AnalysisPromptConfig } from '../modules/contracts/analysis'
 import { ChatCompletionsError } from '../lib/ai/runtime/errors'
-import { ModelUsageIncompleteError } from '../lib/ai/usage'
 
-const directory = await mkdtemp(`${tmpdir()}/yanxing-insight-agent-`)
-const environment = process.env as Record<string, string | undefined>
-const originalNodeEnv = environment.NODE_ENV
-environment.NODE_ENV = 'development'
-environment.YANXING_DATABASE_PATH = path.join(directory, 'insight-agent.sqlite')
-const { migrateDatabase } = await import('../lib/db/client')
-migrateDatabase()
-const insightFilePath = path.join(directory, 'report.docx')
-await writeFile(`${insightFilePath}.content.json`, JSON.stringify({
-  text: '报告正文内容。',
-  paragraphCount: 1,
-  characterCount: 7,
-}))
+const insightDocumentText = '报告正文内容。'
 
 const insightRuntime: ModelRuntime = {
   primary: {
@@ -44,16 +28,27 @@ const insightPromptConfig: AnalysisPromptConfig = {
   updatedBy: 'test',
 }
 
-test.after(async () => {
-  await rm(directory, { recursive: true, force: true })
-  if (originalNodeEnv === undefined) delete environment.NODE_ENV
-  else environment.NODE_ENV = originalNodeEnv
+test('report insight rejects absent or empty document text before network and billing callbacks', async (context) => {
+  const fetchMock = context.mock.method(globalThis, 'fetch', async () => { throw new Error('missing text must not call provider') })
+  let started = 0
+  let completed = 0
+  for (const documentText of [undefined, '']) {
+    await assert.rejects(() => runReportInsightAgent({
+      promptConfig: insightPromptConfig,
+      documentText,
+      runtime: insightRuntime,
+      onCallStarted: () => { started += 1 },
+      onCallCompleted: () => { completed += 1 },
+    }), /报告正文不存在，无法提交给 AI。/)
+  }
+  assert.equal(fetchMock.mock.calls.length, 0)
+  assert.equal(started, 0)
+  assert.equal(completed, 0)
 })
 
-
-test('report insight records complete token usage before deriving output metadata', async () => {
+test('report insight records call completion before deriving output metadata', async () => {
   const originalFetch = globalThis.fetch
-  let completed: { provider: string; model: string; tokens: number } | undefined
+  let completed: { provider: string; model: string } | undefined
   globalThis.fetch = async () => new Response(JSON.stringify({
     choices: [{ finish_reason: 'stop', message: { content: '<h1>洞察</h1><p>正文。</p>' } }],
     usage: { prompt_tokens: 2, completion_tokens: 3, total_tokens: 5 },
@@ -62,7 +57,7 @@ test('report insight records complete token usage before deriving output metadat
   try {
     const output = await runReportInsightAgent({
       promptConfig: insightPromptConfig,
-      file: { path: insightFilePath },
+      documentText: insightDocumentText,
       runtime: insightRuntime,
       onCallCompleted: (details) => {
         completed = details
@@ -71,9 +66,8 @@ test('report insight records complete token usage before deriving output metadat
     assert.deepEqual(completed, {
       provider: 'chat_completions',
       model: 'insight-model',
-      tokens: 5,
     })
-    assert.equal(output.tokens, 5)
+    assert.equal('tokens' in output, false)
     assert.equal(output.title, '洞察')
     assert.equal(output.html, '<h1>洞察</h1><p>正文。</p>')
   } finally {
@@ -81,7 +75,7 @@ test('report insight records complete token usage before deriving output metadat
   }
 })
 
-test('report insight records token usage even when output parsing rejects the HTML', async () => {
+test('report insight records call completion even when output parsing rejects the HTML', async () => {
   const originalFetch = globalThis.fetch
   let completedCalls = 0
   globalThis.fetch = async () => new Response(JSON.stringify({
@@ -93,7 +87,7 @@ test('report insight records token usage even when output parsing rejects the HT
     await assert.rejects(
       () => runReportInsightAgent({
         promptConfig: insightPromptConfig,
-        file: { path: insightFilePath },
+        documentText: insightDocumentText,
         runtime: insightRuntime,
         onCallCompleted: () => {
           completedCalls += 1
@@ -101,7 +95,7 @@ test('report insight records token usage even when output parsing rejects the HT
       }),
       (error: unknown) => error instanceof ChatCompletionsError
         && /洞察内容超过 2000000 字符上限/.test(error.message)
-        && error.usage?.totalTokens === 10
+        && error.completed === true
         && error.provider === 'chat_completions'
         && error.model === 'insight-model',
     )
@@ -111,7 +105,7 @@ test('report insight records token usage even when output parsing rejects the HT
   }
 })
 
-test('report insight does not record incomplete provider token usage', async () => {
+test('report insight completes successfully without provider token usage', async () => {
   const originalFetch = globalThis.fetch
   let completedCalls = 0
   globalThis.fetch = async () => new Response(JSON.stringify({
@@ -119,18 +113,14 @@ test('report insight does not record incomplete provider token usage', async () 
   }), { status: 200 })
 
   try {
-    await assert.rejects(
-      () => runReportInsightAgent({
-        promptConfig: insightPromptConfig,
-        file: { path: insightFilePath },
-        runtime: insightRuntime,
-        onCallCompleted: () => {
-          completedCalls += 1
-        },
-      }),
-      ModelUsageIncompleteError,
-    )
-    assert.equal(completedCalls, 0)
+    const output = await runReportInsightAgent({
+      promptConfig: insightPromptConfig,
+      documentText: insightDocumentText,
+      runtime: insightRuntime,
+      onCallCompleted: () => { completedCalls += 1 },
+    })
+    assert.equal(output.html, '<p>正文。</p>')
+    assert.equal(completedCalls, 1)
   } finally {
     globalThis.fetch = originalFetch
   }
@@ -254,20 +244,18 @@ test('createReportInsightOutput uses the first markdown heading as title', () =>
 test('report history treats an insight-only report as unanalyzed', async () => {
   const { reportHistoryStatus } = await import('../components/report-history-view')
   const status = reportHistoryStatus({
-    id: 'standalone-report',
-    projectId: 'project-1',
-    version: 1,
-    title: '报告',
-    fileName: 'report.docx',
-    fileHash: 'hash',
-    paragraphCount: 1,
-    characterCount: 10,
-    parseStatus: 'ready',
-    latestJobStatus: 'completed',
-    currentAnalysisId: undefined,
-    hasCompletedFullAnalysis: false,
-    createdAt: '2026-01-01T00:00:00.000Z',
-    sourceUpdatedAt: '2026-01-01T00:00:00.000Z',
+    aiScore: undefined,
+    capabilities: {
+      canSubmitUpdate: false,
+      canSubmitCompletion: false,
+      canDelete: false,
+      canCancelAnalysisJob: false,
+      canCancelInsightJob: false,
+      canEditPlan: false,
+      analysisAction: 'start',
+      insightAction: 'none',
+      disabledReasons: [],
+    },
   })
   assert.equal(status.label, '待分析')
 })

@@ -118,3 +118,36 @@ export function getMindMapDirection(root: VisualizationMindMapNode): MindMapDire
   const vScale = Math.min(viewportW / vWidth, viewportH / vHeight)
   return hScale >= vScale ? 'left-to-right' : 'top-to-bottom'
 }
+
+/** 整张导图放入画布后的缩放与居中偏移 */
+export interface MindMapFit {
+  zoom: number
+  panX: number
+  panY: number
+}
+
+/**
+ * 计算把整张导图等比放入画布的缩放与居中偏移。
+ * 取宽、高两个方向所需缩放比的较小值，因此导图在完整可见的前提下尽量大（不被裁切）。
+ */
+export function fitMindMapToViewport(input: {
+  viewportWidth: number
+  viewportHeight: number
+  viewBoxWidth: number
+  viewBoxHeight: number
+  minZoom: number
+  maxZoom: number
+  padding?: number
+}): MindMapFit {
+  const padding = input.padding ?? 0
+  const availableWidth = Math.max(1, input.viewportWidth - padding * 2)
+  const availableHeight = Math.max(1, input.viewportHeight - padding * 2)
+  const rawZoom = Math.min(availableWidth / input.viewBoxWidth, availableHeight / input.viewBoxHeight)
+  // 向下取整到千分位：避免进位后反而超出一两个像素被裁切
+  const zoom = Math.min(input.maxZoom, Math.max(input.minZoom, Math.floor(rawZoom * 1000) / 1000))
+  return {
+    zoom,
+    panX: (input.viewportWidth - input.viewBoxWidth * zoom) / 2,
+    panY: (input.viewportHeight - input.viewBoxHeight * zoom) / 2,
+  }
+}

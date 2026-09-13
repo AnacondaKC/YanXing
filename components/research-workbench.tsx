@@ -1,11 +1,11 @@
 'use client'
 
 import { type CSSProperties } from 'react'
-import { ArrowUpToLine, BookOpen, FileCheck2, FileText, Pencil, Sparkles, TrendingUp, X } from 'lucide-react'
+import { ArrowUpToLine, BookOpen, FileCheck2, FileText, Pencil, Sparkles, TrendingUp, Upload, X } from 'lucide-react'
 import { AnalysisResultHint } from '@/components/analysis-result-hint'
 import { InfoCallout } from '@/components/info-callout'
 import { WorkbenchCardDecoration } from '@/components/ui/card-decoration'
-import type { AnalysisJob } from '@/modules/analysis/domain'
+import type { AnalysisProgressJob } from '@/modules/analysis/progress'
 import {
   analysisResultPlaceholder,
   buildAnalysisProgress,
@@ -14,12 +14,11 @@ import {
   resolveAnalysisResultDisplay,
   type AnalysisProgressNodeState,
 } from '@/modules/analysis/progress'
-import type { AnalysisJobStatus, AnalysisModuleState, AnalysisSnapshotPayload, ReportDetailSection } from '@/modules/contracts/analysis'
+import type { AnalysisJobStatus, AnalysisSnapshotPayload, ReportDetailSection } from '@/modules/contracts/analysis'
 import { activeAnalysisJobStatuses } from '@/lib/analysis-job-progress'
 import { formatReportCharacters } from '@/lib/format'
-import type { ReportVersion } from '@/modules/reports/domain'
 
-export function isWorkbenchAnalysisInFlight(analyzing: boolean, job?: Pick<AnalysisJob, 'status'>) {
+export function isWorkbenchAnalysisInFlight(analyzing: boolean, job?: Pick<AnalysisProgressJob, 'status'>) {
   if (job) return activeAnalysisJobStatuses.has(job.status)
   return analyzing
 }
@@ -36,8 +35,8 @@ export type WorkbenchAnalysisAction = {
 }
 
 export function resolveWorkbenchAnalysisAction(input: {
-  report?: Pick<ReportVersion, 'hasCompletedFullAnalysis'>
-  job?: Pick<AnalysisJob, 'status' | 'errorMessage'>
+  report?: { hasCompletedFullAnalysis?: boolean }
+  job?: Pick<AnalysisProgressJob, 'status' | 'errorMessage'>
 }): WorkbenchAnalysisAction | undefined {
   if (!input.report) return undefined
   if (input.job?.status === 'failed') {
@@ -54,11 +53,11 @@ export function resolveWorkbenchAnalysisAction(input: {
 }
 
 
-export function ReportOverviewCard({ report, stageLabel, snapshot, analyzing, jobStatus, className }: { report: ReportVersion; stageLabel: string; snapshot: AnalysisSnapshotPayload; analyzing?: boolean; jobStatus?: AnalysisJobStatus; className?: string }) {
+export function ReportOverviewCard({ report, stageLabel, snapshot, analyzing, jobStatus, className }: { report: { paragraphCount: number; characterCount: number; previousCharacterCount?: number }; stageLabel: string; snapshot: AnalysisSnapshotPayload; analyzing?: boolean; jobStatus?: AnalysisJobStatus; className?: string }) {
   const completenessConclusion = snapshot.reportDetails?.completenessConclusion
   const reportDetails = snapshot.reportDetails
   const sections = reportDetails?.sections ?? []
-  const characterDelta = report.previousCharacterCount !== undefined ? report.characterCount - report.previousCharacterCount : 0
+  const characterDelta = report.previousCharacterCount !== undefined ? report.characterCount - report.previousCharacterCount : undefined
   const display = resolveAnalysisResultDisplay({ analyzing: Boolean(analyzing), hasData: sections.length > 0, jobStatus })
   const scanning = isAnalysisResultScanning(display)
   const showSections = isAnalysisResultVisible(display)
@@ -77,9 +76,9 @@ export function ReportOverviewCard({ report, stageLabel, snapshot, analyzing, jo
         </div>
         <div className="flex shrink-0 items-center gap-1.5 self-center text-[9px] font-medium sm:text-[10px]">
           <AnalysisResultHint display={display} />
-          {!scanning && display !== 'updating' && display !== 'stale' ? (
+          {!scanning && display !== 'updating' && display !== 'stale' && characterDelta !== undefined ? (
             <span className={characterDelta > 0 ? 'text-yx-brand' : characterDelta < 0 ? 'text-yx-warning' : 'text-yx-faint'}>
-              {characterDelta > 0 ? '↑ ' + formatReportCharacters(characterDelta) : characterDelta < 0 ? '↓ ' + formatReportCharacters(Math.abs(characterDelta)) : '0'} 字 · 较上一版
+              {characterDelta > 0 ? '↑ ' + formatReportCharacters(characterDelta) : characterDelta < 0 ? '↓ ' + formatReportCharacters(Math.abs(characterDelta)) : '—'} 字 · 较上一版
             </span>
           ) : null}
 
@@ -118,9 +117,9 @@ export function ReportOverviewCard({ report, stageLabel, snapshot, analyzing, jo
 
 
 
-export function ResearchWorkbench({ className, analyzing, cancelling, job, moduleStates, canManage, report, viewingHistoricalReport, historicalStageName, onReturnToLatestReport, onCancelAnalysis, onOpenProgress, onEditProject, onStartAnalysis }: { className?: string; analyzing: boolean; cancelling: boolean; job?: AnalysisJob; moduleStates: AnalysisModuleState[]; canManage: boolean; report: ReportVersion; viewingHistoricalReport?: boolean; historicalStageName?: string; onReturnToLatestReport?: () => void; onCancelAnalysis: () => Promise<void>; onOpenProgress?: (milestoneId?: string) => void; onEditProject?: () => void; onStartAnalysis?: (reportId?: string) => void }) {
+export function ResearchWorkbench({ className, analyzing, cancelling, job, canManage, report, viewingHistoricalReport, historicalStageName, onReturnToLatestReport, onCancelAnalysis, onUpdateReport, onOpenProgress, onEditProject, onStartAnalysis }: { className?: string; analyzing: boolean; cancelling: boolean; job?: AnalysisProgressJob; canManage: boolean; report: { id: string; hasCompletedFullAnalysis?: boolean }; viewingHistoricalReport?: boolean; historicalStageName?: string; onReturnToLatestReport?: () => void; onCancelAnalysis: () => Promise<void>; onUpdateReport?: () => void; onOpenProgress?: (milestoneId?: string) => void; onEditProject?: () => void; onStartAnalysis?: (reportId?: string) => void }) {
   const mode = viewingHistoricalReport ? 'historical-view' : 'subsequent-upload'
-  const progress = buildAnalysisProgress({ job, moduleStates })
+  const progress = buildAnalysisProgress({ job })
   const showProgress = isWorkbenchAnalysisInFlight(analyzing, job)
   const analysisAction = showProgress || viewingHistoricalReport ? undefined : resolveWorkbenchAnalysisAction({ report, job })
 
@@ -157,6 +156,9 @@ export function ResearchWorkbench({ className, analyzing, cancelling, job, modul
         />
       ) : mode === 'historical-view' ? (
         <>
+          {onUpdateReport ? (
+            <div className="absolute right-[18px] top-[8px] z-20"><UpdateReportButton onClick={onUpdateReport} /></div>
+          ) : null}
           <div className="absolute inset-x-[18px] top-[34px] bottom-[42px] z-10 flex min-w-0 flex-col items-start justify-center gap-0.5">
             <HistoricalWorkbenchTitle stageName={historicalStageName} />
           </div>
@@ -168,7 +170,7 @@ export function ResearchWorkbench({ className, analyzing, cancelling, job, modul
                 className="inline-flex items-center gap-1.5 rounded-full bg-yx-paper px-3.5 py-1.5 text-[10px] font-bold text-yx-brand shadow-md ring-1 ring-white/70 transition-colors hover:bg-yx-brand-soft"
               >
                 <ArrowUpToLine className="h-3.5 w-3.5 text-yx-brand" />
-                <span>返回当前成果</span>
+                <span>查看最近提交</span>
               </button>
             )}
           </div>
@@ -181,8 +183,8 @@ export function ResearchWorkbench({ className, analyzing, cancelling, job, modul
               <p className="max-w-full truncate text-[9px] font-medium text-white/80 sm:text-[10px]" title={analysisAction.errorMessage}>{analysisAction.errorMessage}</p>
             ) : null}
           </div>
-          {canManage && <div className="absolute bottom-[12px] left-[18px] z-10 flex flex-wrap items-center gap-2">
-            {analysisAction && onStartAnalysis && (
+          {(canManage || onEditProject || onUpdateReport) && <div className="absolute bottom-[12px] left-[18px] z-10 flex flex-wrap items-center gap-2">
+            {canManage && analysisAction && onStartAnalysis && (
               <button
                 type="button"
                 onClick={() => onStartAnalysis(report.id)}
@@ -192,7 +194,8 @@ export function ResearchWorkbench({ className, analyzing, cancelling, job, modul
                 <span>{analysisAction.label}</span>
               </button>
             )}
-            {onOpenProgress && (
+            {onUpdateReport ? <UpdateReportButton onClick={onUpdateReport} /> : null}
+            {canManage && onOpenProgress && (
               <button
                 type="button"
                 onClick={() => onOpenProgress()}
@@ -218,6 +221,20 @@ export function ResearchWorkbench({ className, analyzing, cancelling, job, modul
         </>
       )}
     </div>
+  )
+}
+
+function UpdateReportButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-haspopup="dialog"
+      className="inline-flex items-center gap-1.5 rounded-full bg-yx-paper px-3.5 py-1.5 text-[10px] font-bold text-yx-brand shadow-md ring-1 ring-white/70 transition-colors hover:bg-yx-brand-soft focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white motion-reduce:transition-none"
+    >
+      <Upload aria-hidden="true" className="h-3.5 w-3.5" />
+      更新报告
+    </button>
   )
 }
 
