@@ -7,7 +7,7 @@ import {createServer} from 'node:net'
 import {fileURLToPath} from 'node:url'
 
 const projectRoot=fileURLToPath(new URL('../../',import.meta.url))
-const artifactsRoot=process.env.YANXING_BROWSER_ARTIFACTS_ROOT??tmpdir()
+const artifactsRoot=resolve(process.env.YANXING_BROWSER_ARTIFACTS_ROOT??tmpdir())
 await mkdir(artifactsRoot,{recursive:true})
 const root=await mkdtemp(join(artifactsRoot,process.argv.includes('--p5')?'yanxing-p5-browser-':'yanxing-p4-browser-'))
 const browserExecutable=process.env.YANXING_BROWSER_EXECUTABLE??'/usr/bin/google-chrome'
