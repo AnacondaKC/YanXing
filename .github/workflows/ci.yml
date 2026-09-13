@@ -66,7 +66,7 @@ jobs:
     timeout-minutes: 20
     env:
       YANXING_NEXT_DIST_DIR: .next-browser-ci
-      YANXING_BROWSER_ARTIFACTS_ROOT: ${{ runner.temp }}/browser-artifacts
+      YANXING_BROWSER_ARTIFACTS_ROOT: .browser-artifacts
     steps:
       - uses: actions/checkout@v4
         with:
@@ -90,8 +90,8 @@ jobs:
         with:
           name: browser-diagnostics
           path: |
-            ${{ runner.temp }}/browser-artifacts/**/*.png
-            ${{ runner.temp }}/browser-artifacts/**/*.log
-            ${{ runner.temp }}/browser-artifacts/**/summary.json
-            ${{ runner.temp }}/browser-artifacts/**/ponytail-metrics.json
+            .browser-artifacts/**/*.png
+            .browser-artifacts/**/*.log
+            .browser-artifacts/**/summary.json
+            .browser-artifacts/**/ponytail-metrics.json
           if-no-files-found: ignore

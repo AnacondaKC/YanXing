@@ -4,6 +4,8 @@ node_modules/
 .next-p4-qa/
 .next-p5-qa/
 .next-ui-restore-qa/
+.next-browser-ci/
+.browser-artifacts/
 out/
 .env
 .env.*
