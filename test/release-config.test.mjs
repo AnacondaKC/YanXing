@@ -64,7 +64,7 @@ test('CI reads the repository Node baseline and packageManager without publishin
   const workflow = await readProjectFile('.github/workflows/ci.yml')
   assert.equal((workflow.match(/node-version-file: \.nvmrc/g) ?? []).length, 3)
   assert.doesNotMatch(workflow, /node-version:/)
-  assert.match(workflow, /uses: pnpm\/action-setup@v4/)
+  assert.match(workflow, /uses: pnpm\/action-setup@v5/)
   assert.doesNotMatch(workflow, /version: 11(?:\s|$)/)
   assert.ok(workflow.includes('pnpm install --frozen-lockfile'))
   assert.ok(workflow.includes('sh scripts/test-docker.sh'))
