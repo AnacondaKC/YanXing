@@ -14,13 +14,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ github.sha }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version-file: .nvmrc
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v5
       - run: node --version && pnpm --version
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
@@ -28,7 +28,7 @@ jobs:
         run: pnpm test --test-randomize --test-random-seed=4180762113
       - name: Collect diagnostic coverage (loaded files only)
         run: pnpm test:coverage > coverage.txt 2>&1
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         if: always()
         with:
           name: test-coverage
@@ -41,15 +41,15 @@ jobs:
     env:
       YANXING_TEST_IMAGE: yanxing:ci-test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ github.sha }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version-file: .nvmrc
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v5
       - run: pnpm install --frozen-lockfile
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
       - name: Build the image shared by both container suites
         run: |
           docker pull node:24.20.0-bookworm-slim
@@ -68,13 +68,13 @@ jobs:
       YANXING_NEXT_DIST_DIR: .next-browser-ci
       YANXING_BROWSER_ARTIFACTS_ROOT: .browser-artifacts
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ github.sha }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version-file: .nvmrc
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v5
       - run: pnpm install --frozen-lockfile
       - name: Locate the runner browser
         run: |
@@ -85,7 +85,7 @@ jobs:
       - run: pnpm build
       - name: Exercise real submission retry and UI interactions
         run: pnpm test:browser
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         if: always()
         with:
           name: browser-diagnostics
